@@ -1,0 +1,33 @@
+# Installed by `make setup` (which runs `pre-commit install`).
+# These run on every `git commit` and catch the three things that actually hurt:
+# a leaked key, a commit straight to main, and a formatting war.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, main]
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: block-cloud-keys
+        name: block cloud credential patterns
+        entry: python scripts/check_no_secrets.py
+        language: system
+        pass_filenames: true

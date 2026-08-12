@@ -1,0 +1,25 @@
+# Every PR touching these paths requests a review from the role that owns them.
+# Replace the placeholders with real GitHub handles before the first PR.
+#
+#   @OWNER    = repo owner (you)
+#   @BACKEND  = backend / infra / cloud
+#   @FRONTEND = dashboard / docs formatting
+#   @AI       = models / RAG / evaluation
+
+*                       @OWNER
+
+/core/interfaces/       @OWNER @BACKEND @AI @FRONTEND
+/core/models/           @OWNER @BACKEND @AI @FRONTEND
+/docs/adr/              @OWNER @BACKEND @AI @FRONTEND
+
+/core/                  @BACKEND
+/api/                   @BACKEND
+/infra/                 @BACKEND
+/docker-compose.yml     @BACKEND
+
+/web/                   @FRONTEND
+/docs/diagrams/         @FRONTEND
+
+/ml/                    @AI
+/corpus/                @AI
+/docs/results/          @AI

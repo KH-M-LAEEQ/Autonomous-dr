@@ -1,0 +1,109 @@
+name: autonomousdr
+
+# ---------------------------------------------------------------------------
+# Databases run in Docker.  App code (api, worker) runs natively with hot
+# reload -- see the Makefile.  The `app` profile exists for the one case where
+# you want the worker containerised too (CI, or a clean-machine demo).
+#
+#   make up          -> databases only        (what you use every day)
+#   make up-all      -> databases + worker + beat
+# ---------------------------------------------------------------------------
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: adr-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-adr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-adr_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-adr}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-adr} -d ${POSTGRES_DB:-adr}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: adr-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: adr-influxdb
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_ADMIN_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:-adr_dev_password}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-autonomousdr}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-telemetry}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-dev-token-change-me}
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdata:/var/lib/influxdb2
+      - influxconfig:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: infra/docker/python.Dockerfile
+    container_name: adr-worker
+    command: celery -A core.tasks.app worker --loglevel=INFO
+    env_file: [.env]
+    environment:
+      POSTGRES_HOST: postgres
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-adr}:${POSTGRES_PASSWORD:-adr_dev_password}@postgres:5432/${POSTGRES_DB:-adr}
+      REDIS_URL: redis://redis:6379/0
+      INFLUX_URL: http://influxdb:8086
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      influxdb: {condition: service_healthy}
+    volumes:
+      - ./core:/app/core:ro
+      - ./ml:/app/ml:ro
+
+  beat:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: infra/docker/python.Dockerfile
+    container_name: adr-beat
+    command: celery -A core.tasks.app beat --loglevel=INFO
+    env_file: [.env]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis: {condition: service_healthy}
+    volumes:
+      - ./core:/app/core:ro
+
+volumes:
+  pgdata:
+  redisdata:
+  influxdata:
+  influxconfig:

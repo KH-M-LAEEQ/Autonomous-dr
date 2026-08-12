@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Node
+node_modules/
+web/dist/
+web/.vite/
+*.tsbuildinfo
+
+# Env & secrets  -- NEVER commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+.aws/
+.azure/
+gcp-*.json
+service-account*.json
+.secrets.baseline.local
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# Data & models (keep the loaders, not the payloads)
+ml/datasets/**/*.parquet
+ml/datasets/**/*.csv
+ml/datasets/**/*.jsonl
+ml/models/
+*.pt
+*.pth
+*.pkl
+*.joblib
+ml/notebooks/.ipynb_checkpoints/
+
+# Corpus documents (licensing varies -- store the fetch script, not the PDFs)
+corpus/**/*.pdf
+corpus/**/*.html
+corpus/**/*.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json.example
