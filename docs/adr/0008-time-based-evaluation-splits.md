@@ -1,40 +1,43 @@
-# ADR-0008: Time-based evaluation splits, never shuffled
+# ADR-0008: Time-based evaluation splits
 
-- **Status:** Proposed — accept at the Week 2 design review
-- **Date:** 2026-08-__
-- **Deciders:** BACKEND, FRONTEND, AI
-- **Affects:** ml/harness/evaluate.py, every number in the results chapter
+**Status:** Accepted
+**Date:** 2026-08-17
+**Deciders:** ALL
+
+---
 
 ## Context
 
-TODO — write this in Week 1 together, in your own words. It is the part the
-committee reads. Seed points:
+Our data is time series. A randomly shuffled train/test split puts future observations in
+the training set and past observations in the test set, so the model is scored on
+information it already saw. Reported F1 goes up and means nothing.
 
-- Telemetry is autocorrelated and seasonal. A shuffled split leaks the future into the training set and inflates every metric.
-- Eight or more detectors get compared across 30 weeks; the comparison is only meaningful if the split never changes.
-- The one mistake that would invalidate the entire results chapter is the one to guard with a test.
+Every detector we build — threshold, Isolation Forest, LSTM, the ensemble, the PyOD
+benchmark set, the GNN — has to be compared on identical splits, or the comparison table
+that forms the core of the results chapter is not a comparison.
 
 ## Decision
 
-The evaluation harness splits chronologically — first 70% train, last 30% test —
-for every detector, every time. `ml/harness/evaluate.py` owns the split, no
-caller reimplements it, and `ml/tests/test_harness.py` asserts it never shuffles.
-Reported metrics are precision, recall, F1, false-positive rate and detection
-delay in seconds.
+Strictly temporal splits, never shuffled: **70% train / 15% validation / 15% test**,
+following Karami et al. (arXiv:2510.11141), transcribed in `docs/formulas.md` §2.
+
+The validation set exists so early stopping has somewhere to stop from. Normalisation
+statistics (`μ`, `σ`) and IQR quartiles are computed on training data only.
+
+The Week 10 evaluation harness implements this once, and every detector for the rest of
+the project runs through it — including the Week 31 final run and the ablation study.
 
 ## Consequences
 
-**Good:** TODO
+**Every number in the thesis is comparable.** One harness, one split rule, one metric set
+defined in Week 10 and not touched again. A redefinition in March would invalidate
+everything before it.
 
-**Bad:** TODO — name a real cost. Every one of these has one.
+**Reported scores will be lower than a shuffled split would give.** They will also be
+real.
 
-## Alternatives considered
+**Smaller effective test set.** 15% of a continuously growing dataset is still large by
+Week 31 (300+ labelled episodes), so this is not binding.
 
-| Option | Why not |
-| --- | --- |
-| TODO | TODO |
-
-## Revisit when
-
-Never. Cross-validation variants may be added as extra rows; the primary split
-does not change.
+**Deviation from the original plan.** The plan said 70/30. That has no validation set and
+therefore no basis for early stopping. 70/15/15 supersedes it.

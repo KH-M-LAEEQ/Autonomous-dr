@@ -1,38 +1,48 @@
-# ADR-0006: Celery for asynchronous and scheduled work
+# ADR-0006: Celery for async orchestration
 
-- **Status:** Proposed — accept at the Week 2 design review
-- **Date:** 2026-08-__
-- **Deciders:** BACKEND, FRONTEND, AI
-- **Affects:** core/tasks.py, the collector (Week 3), nightly retrain (Week 11), explanations (Week 16)
+**Status:** Accepted
+**Date:** 2026-08-17
+**Deciders:** ALL
+
+---
 
 ## Context
 
-TODO — write this in Week 1 together, in your own words. It is the part the
-committee reads. Seed points:
+Several parts of the system are slow, unreliable, or scheduled, and none of them belong
+in a request/response cycle:
 
-- The collector must poll every 10 seconds, unattended, for 30+ weeks.
-- LLM explanation must be off the critical path: the action cannot wait for it.
-- Nightly retraining and nightly fault injection are cron-shaped work.
-- Redis is already in the stack as a broker; adding Kafka or Temporal is not free.
+- the collector, polling every 10 seconds, 24/7 from Week 3
+- LLM explanation calls, which can take seconds and can fail entirely
+- nightly model retraining with validation and rollback
+- nightly fault injection runs
+- Terraform plan and apply
+- monthly savings report rollups
+
+The hard requirement: **a recovery action must never wait for a language model.** If the
+LLM API is down, recovery still happens.
 
 ## Decision
 
-Celery with a Redis broker runs all background and scheduled work. Celery beat
-owns the 10-second collector poll and the nightly jobs. Anything that can fail
-slowly runs as a task, not inside a request.
+Celery with Redis as broker, running from Week 1's `docker-compose.yml`. Celery beat for
+scheduled work.
+
+The explanation engine is off the critical path — the action executes, a Celery task
+generates the explanation, and it is pushed to the incident row and the UI when ready. A
+template fallback covers API failure.
 
 ## Consequences
 
-**Good:** TODO
+**Killing the LLM API does not stop recovery.** This is the Week 16 "done when", and it
+falls out of the architecture rather than needing special handling.
 
-**Bad:** TODO — name a real cost. Every one of these has one.
+**Scheduled work is declarative.** The collector and the nightly injector are beat tasks,
+not cron plus scripts, so they are visible and restartable.
 
-## Alternatives considered
+**Retrain rollback is contained.** Week 11's nightly retrain compares validation F1 and
+reverts on regression, inside one task.
 
-| Option | Why not |
-| --- | --- |
-| TODO | TODO |
+**Another moving part.** A worker that dies silently means detections stop. Worker health
+belongs in the Week 28 load test and the Week 32 deployment check.
 
-## Revisit when
-
-Task volume or ordering guarantees outgrow Redis — not expected at this scale.
+**Redis serves two roles** — Celery broker and state cache. Acceptable at our scale;
+separate them if it becomes a bottleneck.

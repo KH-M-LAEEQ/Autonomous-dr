@@ -1,39 +1,51 @@
 # ADR-0001: Provider abstraction behind one interface
 
-- **Status:** Proposed — accept at the Week 2 design review
-- **Date:** 2026-08-__
-- **Deciders:** BACKEND, FRONTEND, AI
-- **Affects:** core/interfaces/cloud_provider.py, every provider from Week 3 to Week 21
+**Status:** Accepted
+**Date:** 2026-08-17
+**Deciders:** ALL
+
+---
 
 ## Context
 
-TODO — write this in Week 1 together, in your own words. It is the part the
-committee reads. Seed points:
+The system must operate across AWS, Azure and GCP. Their SDKs disagree on almost
+everything: metric names, region identifiers, resource models, auth, pagination, error
+semantics. Writing provider-specific code paths through the application means every new
+feature is written three times and every new provider is a refactor.
 
-- Four providers land across 19 weeks: simulated (W3), AWS (W7), Azure (W9), GCP (W21), Terraform (W20).
-- GCP is cuttable at Gate A. Cutting it must not touch the decision engine.
-- Free-tier quotas differ per provider; the interface has to survive that.
+We also need a fake provider from Week 3 — before any real cloud account is wired up —
+so the full loop can be built and demoed without spending money or waiting on IAM.
 
 ## Decision
 
-Every cloud integration implements the single `CloudProvider` interface —
-`get_health`, `list_resources`, `estimate_cost`, `execute`, `get_regions`.
-Provider selection is configuration (`PROVIDERS=` in .env), never a code path.
-Metrics from all providers are normalised onto the 20 canonical signals (Week 9).
+One abstract `CloudProvider` interface in `core/interfaces/`, with five methods:
+
+```
+get_health()
+list_resources()
+estimate_cost(action)
+execute(action)
+get_regions()
+```
+
+Every provider — `SimulatedProvider`, `AWSProvider`, `AzureProvider`, `GCPProvider` —
+implements it. Nothing above the interface knows which provider it is talking to.
+Selecting a provider is a config change.
+
+A metric normalisation layer (Week 9) maps each provider's native metrics onto our 20
+canonical signals, so `get_health()` returns the same shape regardless of source.
 
 ## Consequences
 
-**Good:** TODO
+**Adding a provider is an implementation, not a refactor.** GCP in Week 21 is a new
+class, not a change to the decision engine, the dashboard, or the schema.
 
-**Bad:** TODO — name a real cost. Every one of these has one.
+**The simulator is a first-class provider.** Not a test double bolted on the side — it
+satisfies the same contract, so the Week 6 end-to-end demo exercises the real code path.
 
-## Alternatives considered
+**The interface is a lowest common denominator.** Anything one provider can do that the
+others cannot either gets left out or hidden behind `execute(action)`. Accepted: the
+alternative is leaking provider specifics upward.
 
-| Option | Why not |
-| --- | --- |
-| TODO | TODO |
-
-## Revisit when
-
-A provider needs an operation that cannot be expressed as an action — that is a
-new interface, not a wider one.
+**Frozen after Week 2.** Changing a signature costs an ADR and all three agreeing in
+writing. Adding an implementation is free and expected.
