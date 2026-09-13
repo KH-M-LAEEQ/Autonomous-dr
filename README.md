@@ -108,9 +108,9 @@ Same commands CI runs, so a green local run means a green PR.
 
 `core/interfaces/` and `core/models/` are frozen after the Week 2 design review.
 The five interfaces — `CloudProvider`, `AnomalyDetector`, `ConsensusStrategy`,
-`ActionExecutor`, `ExplanationEngine` (plus `PricingSource`) — are what let a
-17-week-old plan absorb a new cloud provider, a new detector or PBFT without a
-rewrite.
+`ActionExecutor`, `ExplanationEngine` (plus `PricingSource` and
+`ThresholdStrategy`, added in ADR-0009) — are what let a 17-week-old plan
+absorb a new cloud provider, a new detector or PBFT without a rewrite.
 
 - **Adding an implementation is free and expected.** A new detector is a new class
   satisfying `AnomalyDetector`, selected with `DETECTOR=` in `.env`. No other file
