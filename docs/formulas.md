@@ -64,6 +64,22 @@ Threshold rule (Week 4 baseline, never deleted): 3 consecutive breaches → dete
 Record the exact breach definition here, because every later detector is measured
 against it.
 
+### Threshold strategies (Week 10 comparison, ADR-0009)
+
+`ThresholdStrategy` implementations (`core/threshold_strategies.py`), each fit on
+training residuals only:
+
+| Strategy | Rule | Notes |
+| --- | --- | --- |
+| Z-test | flag if `\|residual - μ\| > 3σ` | μ, σ from training residuals |
+| Gaussian likelihood | flag if `N(residual; μ, σ) < cutoff` (default `1e-3`) | same μ, σ as Z-test |
+| Percentile | flag if `residual > P95(train_residuals)` | q configurable, default 95 |
+| IQR (Tukey) | flag if `residual > Q3 + 1.5 × (Q3 − Q1)` | **default** — lowest observed false-positive rate of the four in the Week 10 harness run |
+
+TODO (Week 10, AI role): fill in the actual false-positive-rate numbers from
+the harness run once it exists; the "lowest FPR" claim above is the design
+rationale, the table here should be the proof.
+
 ## 3. Consensus — `liu_consensus`
 
 Quorum: TODO — state the rule as a formula, not prose (`approvals ≥ ⌈(n+1)/2⌉` with

@@ -14,11 +14,13 @@ from core.interfaces import (
     ConsensusStrategy,
     ExplanationEngine,
     PricingSource,
+    ThresholdStrategy,
 )
 
 EXPECTED: dict[ABCMeta, set[str]] = {
     CloudProvider: {"get_health", "list_resources", "estimate_cost", "execute", "get_regions"},
     AnomalyDetector: {"fit", "score", "explain"},
+    ThresholdStrategy: {"fit", "is_anomalous"},
     ConsensusStrategy: {"propose", "vote", "commit"},
     ActionExecutor: {"dry_run", "execute", "rollback", "tier"},
     ExplanationEngine: {"explain"},
