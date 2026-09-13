@@ -32,10 +32,17 @@ class EvalResult:
     extra: dict[str, float] = field(default_factory=dict)
 
 
-def time_based_split(n: int, train_fraction: float = 0.7) -> tuple[slice, slice]:
-    """Chronological split. The only splitting function allowed in this project."""
-    cut = int(n * train_fraction)
-    return slice(0, cut), slice(cut, n)
+def time_based_split(
+    n: int, train_fraction: float = 0.7, val_fraction: float = 0.15
+) -> tuple[slice, slice, slice]:
+    """Chronological train/val/test split. The only splitting function allowed
+    in this project (ADR-0008: 70/15/15, never shuffled, identical for every
+    detector). `val` is what `AnomalyDetector.fit` receives as `X_val`; `test`
+    is what gets scored.
+    """
+    train_cut = int(n * train_fraction)
+    val_cut = train_cut + int(n * val_fraction)
+    return slice(0, train_cut), slice(train_cut, val_cut), slice(val_cut, n)
 
 
 def evaluate(detector_name: str, dataset_version: str) -> EvalResult:
