@@ -29,3 +29,5 @@ artefact, and the viva committee will ask about the decisions you reversed.
 | [0007](0007-simulator-first-testing.md) | Simulator-first development and testing | Proposed |
 | [0008](0008-time-based-evaluation-splits.md) | Time-based evaluation splits, never shuffled | Proposed |
 | [0009](0009-pluggable-thresholds-and-structured-explanations.md) | Pluggable anomaly thresholds and structured, auditable explanations | Proposed |
+| [0010](0010-geopolitical-risk-policy-bounded.md) | Geopolitical risk is policy-bounded, not an autonomous trigger | Proposed |
+| [0012](0012-heterogeneous-detectors-per-node.md) | Heterogeneous detectors per monitor node | Proposed |

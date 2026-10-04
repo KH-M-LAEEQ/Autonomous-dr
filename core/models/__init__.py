@@ -21,6 +21,7 @@ from core.models.enums import (
     HealthState,
     IncidentState,
     ProviderName,
+    RiskSourceType,
     VoteChoice,
 )
 
@@ -44,6 +45,7 @@ __all__ = [
     "Proposal",
     "ProviderName",
     "Resource",
+    "RiskSourceType",
     "Vote",
     "VoteChoice",
 ]
