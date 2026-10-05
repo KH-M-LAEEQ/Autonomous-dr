@@ -18,41 +18,60 @@ Rules:
 
 | Key | Citation (fill in full, exactly as it will appear in the thesis) | Used for |
 | --- | --- | --- |
-| `li_utility` | TODO — Li et al. | Utility function `U(c, l, m)` |
+| `li_utility` | Li et al., Eq. 7, p. 1183 | Utility function (extended, see ADR-0011) |
 | `liu_consensus` | TODO — Liu et al. | Consensus / voting model |
 | `karami_anomaly` | TODO — Karami et al. | Anomaly scoring |
 
-## 1. Utility function `U(c, l, m)` — `li_utility`, Eq. ??, p. ??
+## 1. Utility function — `li_utility` (Li et al., Eq. 7, p. 1183)
+
+As published (scores candidate **nodes**):
 
 ```
-TODO: transcribe the equation exactly.
+U(cl_m) = w_ability * Phi_m - w_cost * C_failover(cl_m)
 ```
 
-| Symbol | Meaning | Unit | Range | Source of the value at runtime |
+Ours (scores candidate **actions**; contract in ADR-0011, code in
+`core/decision/utility.py`):
+
+```
+U = sum over present terms of  sign * weight * term
+
+  + w_ability * ability        Phi: capability of the action's target. 1.0 until W3 data.
+  - w_cost    * cost
+  - w_latency * latency
+  + w_safety  * safety         reversibility
+  - w_impact  * impact         (W13)
+  - w_price   * price_delta    (W21)
+  - w_risk    * risk           (W22)
+```
+
+| Term | Meaning | Normalised against | Range | Ships |
 | --- | --- | --- | --- | --- |
-| `c` | cost | USD | ≥ 0 | `CostEstimate` from the active `PricingSource` |
-| `l` | latency / recovery time | seconds | ≥ 0 | measured, or estimated per action type |
-| `m` | TODO | | | |
-| `w_c, w_l, w_m` | weights | — | sum to 1 | hardcoded in Week 5, learned in Week 25 |
+| `ability` | capability of the action's target (Li Phi) | already 0-1 | [0, 1] | W5 (stub 1.0) |
+| `cost` | action cost | tenant budget cap | [0, 1] | W5 |
+| `latency` | expected recovery time | 60 s target | [0, 1] | W5 |
+| `safety` | reversibility of the action | tier table | [0, 1] | W5 |
+| `impact` | blast radius | dependency graph | [0, 1] | W13 |
+| `price_delta` | cross-cloud price gap | provider prices | [0, 1] | W21 |
+| `risk` | region risk | risk score | [0, 1] | W22 |
 
-**Normalisation:** TODO — how does each term get to a comparable scale? State it
-explicitly; this is where implementations silently diverge from papers.
+**Rules:** every term is normalised to [0, 1] before weighting; signs live in a
+registry (ability and safety add, the rest subtract); weights are non-negative and sum
+to 1 over the present terms, so U is in [-1, 1]; an absent term is not a zero term and
+a new term means a new `formula_version`; a `Decision` is only valid if `terms` and
+`weights` have the same keys, `ability` is present and `utility` equals the formula.
+
+**Hardcoded Week 5 weights:** ability 0.20, cost 0.25, latency 0.25, safety 0.30.
+Week 25's bandit moves them inside per-tenant bounds and keeps the sum at 1.
 
 **Worked values from the paper** (the Week 5 unit test asserts these exactly):
 
-| Case | `c` | `l` | `m` | Expected `U` | Paper reference |
-| --- | --- | --- | --- | --- | --- |
-| TODO | | | | | Table ?, p. ? |
+| Case | Expected `U` | Paper reference |
+| --- | --- | --- |
+| TODO: transcribe from Li et al. | | Table ?, p. ? |
 
-**Extensions this project adds** — each one gets a row, because each one is a
-contribution to defend:
-
-| Week | Extra term | Why | Bounded by |
-| --- | --- | --- | --- |
-| 13 | blast-radius / impact score | cascade awareness from the dependency graph | `[0, 1]` |
-| 21 | cross-cloud price delta | the "cost-aware" claim has to be real | budget gate |
-| 22 | region risk score | proactive OSINT signal | `[0, 1]` |
-| 25 | learned weights | Thompson sampling | hard bounds, cannot bypass the budget gate |
+Our own worked example (`core/tests/test_utility.py`): ability 1.0, cost 0.2,
+latency 0.1, safety 0.9 with the weights above gives U = 0.395.
 
 ## 2. Anomaly score — `karami_anomaly`
 
