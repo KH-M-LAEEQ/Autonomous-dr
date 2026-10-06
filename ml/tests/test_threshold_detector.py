@@ -70,13 +70,3 @@ def test_explain_reports_the_offending_signal() -> None:
     assert explanation["detector"] == "threshold"
     assert explanation["signal"] == "cpu_pct"
     assert explanation["consecutive_breaches"] == 1
-
-
-def test_fit_ignores_x_val() -> None:
-    """X_val is accepted (per the AnomalyDetector.fit contract) but a
-    rule-based detector has no held-out-set use for it."""
-    detector = build("threshold")
-    train = [_window(30.0) for _ in range(10)]
-    val = [_window(999.0) for _ in range(10)]  # would corrupt the baseline if used
-    detector.fit(train, X_val=val)
-    assert detector.score(_window(30.0)) == 0.0
