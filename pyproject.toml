@@ -16,6 +16,7 @@ dependencies = [
     "influxdb-client>=1.47",
     "httpx>=0.28",
     "tenacity>=9.0",
+    "pgvector>=0.3",
 ]
 
 [project.optional-dependencies]
