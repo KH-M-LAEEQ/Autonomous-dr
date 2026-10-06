@@ -3,9 +3,11 @@ import { useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { Badge } from "../components/Badge";
 import { Countdown } from "../components/Countdown";
+import { AsyncStatus } from "../components/AsyncStatus";
 import { getApproval } from "../api/client";
-import type { ApprovalRequest, DryRunStep } from "../api/types";
+import type { DryRunStep } from "../api/types";
 import { formatUsd } from "../lib/format";
+import { useAsyncData } from "../lib/useAsyncData";
 
 const STEP_LABEL: Record<DryRunStep["status"], string> = {
   planned: "Planned",
@@ -15,28 +17,20 @@ const STEP_LABEL: Record<DryRunStep["status"], string> = {
 
 export function Approval() {
   const { id } = useParams<{ id: string }>();
-  const [approval, setApproval] = useState<ApprovalRequest | null | undefined>(undefined);
   const [decision, setDecision] = useState<"approved" | "rejected" | null>(null);
+  const state = useAsyncData(() => (id ? getApproval(id) : Promise.resolve(null)), [id]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setApproval(undefined);
-    setDecision(null);
-    if (!id) return;
-    getApproval(id).then((result) => {
-      if (!cancelled) setApproval(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+  // A new id means a different approval request -- a stale decision from
+  // the previous one must not carry over onto this one.
+  useEffect(() => setDecision(null), [id]);
 
-  if (approval === undefined) {
-    return <p className="text-sm text-muted">Loading approval request…</p>;
+  if (state.status !== "success") {
+    return <AsyncStatus state={state} loadingLabel="Loading approval request…" />;
   }
-  if (approval === null) {
+  if (state.data === null) {
     return <p className="text-sm text-muted">No data for approval {id}.</p>;
   }
+  const approval = state.data;
 
   const minutes = Math.floor(approval.undoWindowSeconds / 60);
 

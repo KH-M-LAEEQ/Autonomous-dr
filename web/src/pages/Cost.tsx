@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
 import { Card } from "../components/Card";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { AsyncStatus } from "../components/AsyncStatus";
 import { getCost } from "../api/client";
-import type { CostData, CostEstimateRow, PriceComparisonRow, UnusedResource } from "../api/types";
+import type { CostEstimateRow, PriceComparisonRow, UnusedResource } from "../api/types";
 import { formatDateTime, formatUsd } from "../lib/format";
+import { useAsyncData } from "../lib/useAsyncData";
 
 const estimateColumns: DataTableColumn<CostEstimateRow>[] = [
   { key: "label", header: "Action", render: (row) => row.label },
@@ -25,21 +26,12 @@ const unusedColumns: DataTableColumn<UnusedResource>[] = [
 ];
 
 export function Cost() {
-  const [data, setData] = useState<CostData | null>(null);
+  const state = useAsyncData(getCost);
 
-  useEffect(() => {
-    let cancelled = false;
-    getCost().then((result) => {
-      if (!cancelled) setData(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!data) {
-    return <p className="text-sm text-muted">Loading cost and waste…</p>;
+  if (state.status !== "success") {
+    return <AsyncStatus state={state} loadingLabel="Loading cost and waste…" />;
   }
+  const data = state.data;
 
   const spendPercent = Math.min(100, Math.round((data.spendUsd / data.capUsd) * 100));
 

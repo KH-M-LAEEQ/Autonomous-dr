@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   CartesianGrid,
@@ -13,10 +12,11 @@ import {
 import { Card } from "../components/Card";
 import { KpiCard } from "../components/KpiCard";
 import { Badge, type BadgeTone } from "../components/Badge";
+import { AsyncStatus } from "../components/AsyncStatus";
 import { getOverview } from "../api/client";
-import type { OverviewData } from "../api/types";
 import { RECOVERY_LATENCY_TARGET_SECONDS } from "../api/types";
 import { formatDateTime, formatMetric } from "../lib/format";
+import { useAsyncData } from "../lib/useAsyncData";
 
 const SEVERITY_TONE: Record<string, BadgeTone> = {
   critical: "danger",
@@ -32,21 +32,12 @@ const CLOUD_STATUS_TONE: Record<string, BadgeTone> = {
 };
 
 export function Overview() {
-  const [data, setData] = useState<OverviewData | null>(null);
+  const state = useAsyncData(getOverview);
 
-  useEffect(() => {
-    let cancelled = false;
-    getOverview().then((result) => {
-      if (!cancelled) setData(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!data) {
-    return <p className="text-sm text-muted">Loading overview…</p>;
+  if (state.status !== "success") {
+    return <AsyncStatus state={state} loadingLabel="Loading overview…" />;
   }
+  const data = state.data;
 
   const chartData = data.recoveryLatency.map((point) => ({
     time: new Date(point.timestamp).toLocaleTimeString(undefined, {

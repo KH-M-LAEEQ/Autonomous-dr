@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { Badge, type BadgeTone } from "../components/Badge";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { AsyncStatus } from "../components/AsyncStatus";
 import { getIncident } from "../api/client";
-import type { IncidentDetail, ScoredOption, TermKey } from "../api/types";
+import type { ScoredOption, TermKey } from "../api/types";
 import { QUORUM_REQUIRED, QUORUM_TOTAL } from "../api/types";
 import { formatDateTime, formatTerm, formatUsd } from "../lib/format";
+import { useAsyncData } from "../lib/useAsyncData";
 
 const SEVERITY_TONE: Record<string, BadgeTone> = {
   critical: "danger",
@@ -42,26 +43,15 @@ function allTermKeys(options: ScoredOption[]): TermKey[] {
 
 export function Incident() {
   const { id } = useParams<{ id: string }>();
-  const [incident, setIncident] = useState<IncidentDetail | null | undefined>(undefined);
+  const state = useAsyncData(() => (id ? getIncident(id) : Promise.resolve(null)), [id]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setIncident(undefined);
-    if (!id) return;
-    getIncident(id).then((result) => {
-      if (!cancelled) setIncident(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
-
-  if (incident === undefined) {
-    return <p className="text-sm text-muted">Loading incident…</p>;
+  if (state.status !== "success") {
+    return <AsyncStatus state={state} loadingLabel="Loading incident…" />;
   }
-  if (incident === null) {
+  if (state.data === null) {
     return <p className="text-sm text-muted">No data for incident {id}.</p>;
   }
+  const incident = state.data;
 
   const termKeys = allTermKeys(incident.decision.options);
   const approvals = incident.votes.filter((vote) => vote.choice === "approve").length;

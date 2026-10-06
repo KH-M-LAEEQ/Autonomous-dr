@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
 import { Card } from "../components/Card";
 import { Badge, type BadgeTone } from "../components/Badge";
+import { AsyncStatus } from "../components/AsyncStatus";
 import { getTopology } from "../api/client";
-import type { TopologyData, TopologyService } from "../api/types";
+import type { TopologyService } from "../api/types";
+import { useAsyncData } from "../lib/useAsyncData";
 
 const STATUS_TONE: Record<TopologyService["status"], BadgeTone> = {
   healthy: "ok",
@@ -11,21 +12,12 @@ const STATUS_TONE: Record<TopologyService["status"], BadgeTone> = {
 };
 
 export function Topology() {
-  const [data, setData] = useState<TopologyData | null>(null);
+  const state = useAsyncData(getTopology);
 
-  useEffect(() => {
-    let cancelled = false;
-    getTopology().then((result) => {
-      if (!cancelled) setData(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!data) {
-    return <p className="text-sm text-muted">Loading topology…</p>;
+  if (state.status !== "success") {
+    return <AsyncStatus state={state} loadingLabel="Loading topology…" />;
   }
+  const data = state.data;
 
   const serviceById = new Map(data.services.map((service) => [service.id, service]));
   const predicted = serviceById.get(data.predictedNextAtRisk.serviceId);

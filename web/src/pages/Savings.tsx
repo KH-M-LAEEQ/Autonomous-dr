@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card } from "../components/Card";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { AsyncStatus } from "../components/AsyncStatus";
 import { getSavings } from "../api/client";
-import type { SavingsData, SavingsEntry } from "../api/types";
+import type { SavingsEntry } from "../api/types";
 import { formatUsd } from "../lib/format";
+import { useAsyncData } from "../lib/useAsyncData";
 
 const entryColumns: DataTableColumn<SavingsEntry & { id: string }>[] = [
   { key: "incident", header: "Incident", render: (row) => row.incidentId },
@@ -15,21 +16,12 @@ const entryColumns: DataTableColumn<SavingsEntry & { id: string }>[] = [
 ];
 
 export function Savings() {
-  const [data, setData] = useState<SavingsData | null>(null);
+  const state = useAsyncData(getSavings);
 
-  useEffect(() => {
-    let cancelled = false;
-    getSavings().then((result) => {
-      if (!cancelled) setData(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!data) {
-    return <p className="text-sm text-muted">Loading savings report…</p>;
+  if (state.status !== "success") {
+    return <AsyncStatus state={state} loadingLabel="Loading savings report…" />;
   }
+  const data = state.data;
 
   const totalNet = data.entries.reduce((sum, entry) => sum + entry.netSavingUsd, 0);
   const chartData = data.sensitivity.map((point) => ({

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
 import { Card } from "../components/Card";
 import { Badge, type BadgeTone } from "../components/Badge";
+import { AsyncStatus } from "../components/AsyncStatus";
 import { getRegionalRisk } from "../api/client";
-import type { RegionalRiskData, RegionRisk } from "../api/types";
+import type { RegionRisk } from "../api/types";
 import { riskLevelFor } from "../api/types";
 import { formatDateTime } from "../lib/format";
+import { useAsyncData } from "../lib/useAsyncData";
 
 const LEVEL_TONE: Record<string, BadgeTone> = {
   low: "ok",
@@ -38,21 +39,12 @@ function formulaFor(region: RegionRisk): string {
 }
 
 export function Risk() {
-  const [data, setData] = useState<RegionalRiskData | null>(null);
+  const state = useAsyncData(getRegionalRisk);
 
-  useEffect(() => {
-    let cancelled = false;
-    getRegionalRisk().then((result) => {
-      if (!cancelled) setData(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!data) {
-    return <p className="text-sm text-muted">Loading regional risk…</p>;
+  if (state.status !== "success") {
+    return <AsyncStatus state={state} loadingLabel="Loading regional risk…" />;
   }
+  const data = state.data;
 
   const groups = groupByProvider(data.regions);
 
