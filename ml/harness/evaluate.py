@@ -1,7 +1,7 @@
 """The evaluation harness -- Week 10, and the highest-leverage thing in the ml/ tree.
 
 Rules that must never be broken, because every number in your thesis depends on them:
-  1. Time-based split. First 70% train, last 30% test. NEVER shuffle telemetry.
+  1. Time-based split, 70/15/15 train/val/test. NEVER shuffle telemetry.
   2. Identical splits for every detector, every time.
   3. Report precision, recall, F1, false-positive rate, and detection delay in seconds.
   4. Bad results go in the table too.
@@ -35,12 +35,13 @@ realistic episode counts; holding every window for every resource at once is
 gigabytes of Python floats. One pass per resource keeps peak memory to a single
 resource's history at the cost of re-reading the file, which is seconds.
 
-**Known caveat on the split (rule 1 above vs ADR-0008).** This docstring's rule
-1 says 70/30; ADR-0008 and `time_based_split`'s defaults say 70/15/15. They
-disagree. This module follows ADR-0008 (the ADR outranks a docstring), which
-means the test slice is the last 15%, not 30%, and the val slice currently has
-no consumer -- the post-freeze `AnomalyDetector.fit` takes no `X_val`. Worth
-resolving before any thesis number is computed, because it halves the test set.
+**The split is 70/15/15, settled.** Rule 1 above used to say 70/30, which
+contradicted ADR-0008 and `time_based_split`'s own defaults. `docs/formulas.md`
+section 2 resolves it in favour of 70/15/15: the val slice is what early
+stopping monitors (the W11 LSTM, patience 5), and "a 70/30 split has nowhere to
+stop from". Code, docstring and ADR now agree. The val slice has no consumer
+yet because the post-freeze `AnomalyDetector.fit` takes no `X_val`; it is
+reserved, not spare, and must not be folded into train or test.
 """
 
 from __future__ import annotations
@@ -449,9 +450,9 @@ def render_markdown(results: list[EvalResult], manifest: dict[str, Any]) -> str:
         "  seasonality cycles without a multi-gigabyte window file (see finding 2).",
         "  It coarsens delay resolution to one step, which is why the floor is",
         f"  {3 * manifest['virtual_clock']['step_seconds']}s rather than 30s.",
-        "- **The 70/15/15 vs 70/30 split inconsistency** between ADR-0008 and",
-        "  `ml/harness/evaluate.py`'s own rule 1 is unresolved; this run used",
-        "  70/15/15. Resolving it changes the test-set size.",
+        "- **The split is 70/15/15** (ADR-0008, `docs/formulas.md` section 2). The",
+        "  val slice is reserved for early stopping and has no consumer yet, so the",
+        "  test slice is the last 15% only.",
         "- **Generated telemetry has a seasonality curve but no multi-day drift,**",
         "  and no provider-specific noise at all.",
         "",
