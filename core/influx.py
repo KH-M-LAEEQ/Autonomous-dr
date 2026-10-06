@@ -18,7 +18,9 @@ def get_client() -> InfluxDBClient:
     global _client
     if _client is None:
         s = get_settings()
-        _client = InfluxDBClient(url=s.influx_url, token=s.influx_token, org=s.influx_org)
+        _client = InfluxDBClient(
+            url=s.influx_url, token=s.influx_token, org=s.influx_org, timeout=2_000
+        )
     return _client
 
 
