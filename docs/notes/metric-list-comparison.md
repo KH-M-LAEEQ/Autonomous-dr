@@ -1,5 +1,12 @@
 # Metric list: `docs/metrics.md` vs `docs/metric-schema.md`, side by side
 
+> **RESOLVED: column B won.** `docs/metric-schema.md` is now the single metric
+> list and `core/signals.py` implements it exactly -- 20 canonical + 5 reserve,
+> its names, its units (error rates are 0-1 fractions). Column A has moved to
+> `docs/notes/old-metrics.md`. This table is kept because it is still the clearest
+> record of what changed, and the "not just a rename" rows below are exactly the
+> places a stale caller will break.
+
 **No decision is made in this file.** It exists so the 20 canonical signals can
 be chosen from one table instead of two documents. Choosing is yours.
 

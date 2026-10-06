@@ -67,7 +67,7 @@ def _window(end: datetime, step_seconds: int = 10, samples: int = 12) -> MetricW
         start=end - timedelta(seconds=step_seconds * (samples - 1)),
         end=end,
         step_seconds=step_seconds,
-        values={"cpu_pct": [30.0] * samples},
+        values={"cpu_percent": [30.0] * samples},
     )
 
 
@@ -135,7 +135,7 @@ def _write_dataset(root: Path, resources: list[str], n_normal: int = 60) -> None
                     "start": (end - timedelta(seconds=step * (samples - 1))).isoformat(),
                     "end": end.isoformat(),
                     "step_seconds": step,
-                    "values": {"cpu_pct": [cpu] * samples},
+                    "values": {"cpu_percent": [cpu] * samples},
                 }
             )
     (out / "windows.jsonl").write_text(

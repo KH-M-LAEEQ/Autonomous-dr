@@ -42,9 +42,12 @@
     "sim-worker-1"
   ],
   "notes": [
+    "OLD SIGNAL NAMES -- practice only. Generated before docs/metric-schema.md was adopted as the single metric list: this dataset uses the retired docs/notes/old-metrics.md names and units (cpu_pct, error_rate_pct as a percentage, uptime_pct, ...). Not comparable with v4+ and not regenerable by the current make_episodes.py. Kept for provenance; do not delete.",
     "Simulator data. Practice only -- not thesis material.",
     "Fault windows are bounded by clear_fault, not by the Redis TTL.",
     "region_down labels list every affected resource, not just the target.",
     "Telemetry is reproducible from `seed` alone, given the same metric list."
-  ]
+  ],
+  "deprecated": true,
+  "signal_schema": "old (pre-metric-schema.md)"
 }

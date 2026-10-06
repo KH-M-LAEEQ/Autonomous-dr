@@ -58,7 +58,7 @@ from core import faults
 from core.models.domain import Resource
 from core.providers import simulated as simulated_module
 from core.providers.simulated import FAULT_TYPES, SimulatedProvider
-from core.signals import CANONICAL_SIGNALS
+from core.signals import ALL_COLLECTED_SIGNALS, CANONICAL_SIGNALS, RESERVE_SIGNALS
 
 # Long enough that the TTL never fires mid-episode; `clear_fault` ends the
 # window instead. See the module docstring.
@@ -162,10 +162,13 @@ def _check_redis_reachable() -> None:
 def _metric_list_version() -> dict[str, Any]:
     """Identifies the exact signal list this dataset was built against, so a
     later change to `core/signals.py` is detectable rather than silent."""
-    joined = ",".join(CANONICAL_SIGNALS)
+    joined = ",".join(ALL_COLLECTED_SIGNALS)
     return {
-        "source": "core.signals.CANONICAL_SIGNALS",
-        "count": len(CANONICAL_SIGNALS),
+        "source": "core.signals.ALL_COLLECTED_SIGNALS",
+        "spec": "docs/metric-schema.md",
+        "canonical_count": len(CANONICAL_SIGNALS),
+        "reserve_count": len(RESERVE_SIGNALS),
+        "count": len(ALL_COLLECTED_SIGNALS),
         "sha256": hashlib.sha256(joined.encode()).hexdigest()[:16],
     }
 
@@ -217,14 +220,24 @@ async def _tick(
         report = await provider.get_health(resource.id)
         if not report.signals:
             continue
+        # Only the signals this resource actually reports. A signal that does
+        # not apply to its kind is absent from `report.signals` and stays
+        # absent here -- absent is null, and null is never 0.0
+        # (core/signals.py). So a worker's windows simply have no
+        # `request_rate` key, rather than a column of fake zeroes.
         series_by_signal = history.setdefault(resource.id, {})
-        for signal in CANONICAL_SIGNALS:
+        for signal in ALL_COLLECTED_SIGNALS:
+            value = report.signals.get(signal)
+            if value is None:
+                continue
             series = series_by_signal.setdefault(signal, [])
-            series.append(round(float(report.signals[signal]), 4))
+            series.append(round(float(value), 4))
             if len(series) > window_samples:
                 del series[0]
 
-        if len(series_by_signal[CANONICAL_SIGNALS[0]]) < window_samples:
+        if not series_by_signal:
+            continue
+        if min(len(s) for s in series_by_signal.values()) < window_samples:
             continue
 
         end = clock.value

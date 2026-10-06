@@ -34,6 +34,7 @@ from sklearn.ensemble import IsolationForest
 
 from core.interfaces.anomaly_detector import AnomalyDetector
 from core.models.domain import MetricWindow
+from core.signals import DETECTOR_SIGNALS
 from ml.detectors import register
 from ml.detectors.threshold import CONSECUTIVE_BREACHES_REQUIRED, IQR_MULTIPLIER, _percentile
 
@@ -118,20 +119,24 @@ class IsolationForestDetector(AnomalyDetector):
             raise ValueError(f"need at least 2 training windows, got {len(X)}")
 
         # Signal order is frozen here and every later vector follows it.
+        # Restricted to DETECTOR_SIGNALS: the 20 canonical signals minus
+        # `uptime_seconds`. Reserve signals are collected but consumed by
+        # nothing (docs/metric-schema.md), and a monotonic counter would teach
+        # the forest that the passage of time is anomalous.
         present: list[str] = []
         for window in X:
-            for signal in window.values:
-                if signal not in present:
+            for signal in DETECTOR_SIGNALS:
+                if signal not in present and window.values.get(signal):
                     present.append(signal)
         if not present:
-            raise ValueError("training windows carry no signals")
+            raise ValueError("training windows carry no detector signals")
         self._signals = tuple(present)
 
         sums: dict[str, float] = {}
         counts: dict[str, int] = {}
         for window in X:
-            for signal, series in window.values.items():
-                for value in series:
+            for signal in self._signals:
+                for value in window.values.get(signal) or []:
                     sums[signal] = sums.get(signal, 0.0) + value
                     counts[signal] = counts.get(signal, 0) + 1
         self._train_mean = {s: sums[s] / counts[s] for s in sums}

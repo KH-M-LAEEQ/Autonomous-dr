@@ -29,8 +29,8 @@ def _window(cpu: float, latency: float = 120.0, rng: random.Random | None = None
         end=now,
         step_seconds=10,
         values={
-            "cpu_pct": [cpu + r.gauss(0, 1.0) for _ in range(12)],
-            "latency_p95_ms": [latency + r.gauss(0, 8.0) for _ in range(12)],
+            "cpu_percent": [cpu + r.gauss(0, 1.0) for _ in range(12)],
+            "latency_p95": [latency + r.gauss(0, 8.0) for _ in range(12)],
         },
     )
 
@@ -78,7 +78,7 @@ def test_fit_rejects_signal_free_windows() -> None:
         values={},
     )
     detector = build("iforest")
-    with pytest.raises(ValueError, match="no signals"):
+    with pytest.raises(ValueError, match="no detector signals"):
         detector.fit([empty, empty])
 
 
@@ -131,7 +131,7 @@ def test_explain_describes_the_last_score_and_never_raises() -> None:
     assert explanation["consecutive_breaches"] == 1
     assert explanation["breaches_required"] == 3
     assert explanation["score"] > 0
-    assert explanation["top_deviating_signals"][0]["signal"] == "cpu_pct"
+    assert explanation["top_deviating_signals"][0]["signal"] == "cpu_percent"
 
 
 def test_missing_signal_is_filled_with_the_training_mean_not_zero() -> None:
@@ -145,10 +145,10 @@ def test_missing_signal_is_filled_with_the_training_mean_not_zero() -> None:
         start=now - timedelta(seconds=110),
         end=now,
         step_seconds=10,
-        values={"cpu_pct": [30.0] * 12},  # latency_p95_ms absent entirely
+        values={"cpu_percent": [30.0] * 12},  # latency_p95 absent entirely
     )
     vector = detector._vector(partial)
-    latency_mean = detector._train_mean["latency_p95_ms"]
+    latency_mean = detector._train_mean["latency_p95"]
     # The three latency features are mean/std/last; mean and last take the
     # training mean, which is nowhere near zero.
     assert latency_mean > 100.0

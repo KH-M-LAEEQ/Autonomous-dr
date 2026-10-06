@@ -1,3 +1,12 @@
+> **REPLACED. Do not use.** This was one of two competing metric lists. The
+> project settled on `docs/metric-schema.md` (20 canonical + 5 reserve signals),
+> which is what `core/signals.py` now implements. This file is kept only so the
+> reasoning behind the earlier selection stays on the record, and because
+> `ml/datasets/v1`-`v3` were generated against these names and units.
+>
+> Differences between the two lists are tabulated in
+> `docs/notes/metric-list-comparison.md`.
+
 # Metric schema — the 20 canonical signals
 
 Week 3, AI role. `core/signals.py` is the source of truth; this file is the
