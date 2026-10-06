@@ -57,6 +57,11 @@ class ThresholdDetector(AnomalyDetector):
 
     name = "threshold"
     requires_training = True
+    # Declared here so the attribute exists before `fit` under either version
+    # of the interface: the post-freeze `AnomalyDetector` defines it on the
+    # base class, the pre-freeze one on this branch does not. `fit` overwrites
+    # it with the IQR fence; this default is never used for a real decision.
+    decision_threshold: float = 0.5
 
     def __init__(self) -> None:
         self._baseline: dict[str, float] = {}
