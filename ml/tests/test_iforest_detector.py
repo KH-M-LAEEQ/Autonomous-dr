@@ -158,6 +158,8 @@ def test_missing_signal_is_filled_with_the_training_mean_not_zero() -> None:
 
 def test_fit_is_reproducible_for_a_fixed_random_state() -> None:
     a, b = build("iforest", random_state=5), build("iforest", random_state=5)
+    assert isinstance(a, IsolationForestDetector)
+    assert isinstance(b, IsolationForestDetector)
     train = _normal_windows()
     a.fit(train)
     b.fit(train)

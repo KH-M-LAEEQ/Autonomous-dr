@@ -194,7 +194,7 @@ class UnscaledThresholdDetector(ThresholdDetector):
 
     name = "threshold_unscaled"
 
-    def fit(self, X: list[MetricWindow]) -> None:
+    def fit(self, X: list[MetricWindow], X_val: list[MetricWindow] | None = None) -> None:
         if not X:
             raise ValueError("need at least 1 training window")
 

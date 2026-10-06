@@ -449,7 +449,7 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
     first_tick = clock.value
 
     original_datetime = simulated_module.datetime
-    simulated_module.datetime = _ClockDatetime(clock)  # type: ignore[assignment]
+    simulated_module.datetime = _ClockDatetime(clock)  # type: ignore[assignment, misc]
     try:
         with (out_dir / "windows.jsonl").open("w", encoding="utf-8", newline="\n") as windows_out:
             for episode in range(args.episodes):
@@ -542,7 +542,7 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
                     args.window_samples,
                 )
     finally:
-        simulated_module.datetime = original_datetime  # type: ignore[assignment]
+        simulated_module.datetime = original_datetime  # type: ignore[assignment, misc]
         for resource in resources:
             faults.clear_fault(resource.id)
 

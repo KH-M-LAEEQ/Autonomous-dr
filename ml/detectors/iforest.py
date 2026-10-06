@@ -107,7 +107,7 @@ class IsolationForestDetector(AnomalyDetector):
 
     # -- AnomalyDetector --------------------------------------------------
 
-    def fit(self, X: list[MetricWindow]) -> None:
+    def fit(self, X: list[MetricWindow], X_val: list[MetricWindow] | None = None) -> None:
         """Fit the forest and the IQR cutoff on normal windows only.
 
         `X` must contain no known faults -- this is a novelty detector, and a

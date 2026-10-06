@@ -1,7 +1,7 @@
 [
   {
-    "detector": "threshold",
-    "dataset_version": "v3",
+    "detector": "threshold_unscaled",
+    "dataset_version": "v4",
     "precision": 0.0,
     "recall": 0.0,
     "f1": 0.0,
@@ -9,44 +9,243 @@
     "detection_delay_p50_s": NaN,
     "detection_delay_p95_s": NaN,
     "detection_delay_p99_s": NaN,
-    "n_episodes": 19,
+    "n_episodes": 27,
     "seed": 42,
     "notes": "simulator data, practice only, not for the thesis",
     "extra": {
       "true_positives": 0,
       "false_positives": 0,
-      "true_negatives": 8682,
-      "false_negatives": 118,
-      "train_windows": 40331,
-      "test_windows": 8800,
+      "true_negatives": 26328,
+      "false_negatives": 256,
+      "train_windows": 122433,
+      "test_windows": 26584,
       "episodes_detected": 0,
       "episode_detection_rate": 0.0,
       "delay_samples": 0
+    },
+    "by_shape": {
+      "cpu_hog": {
+        "episodes": 1.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "intermittent": {
+        "episodes": 15.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "latency": {
+        "episodes": 2.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "pause": {
+        "episodes": 1.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "region_down": {
+        "episodes": 2.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "small_step": {
+        "episodes": 4.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "stop": {
+        "episodes": 2.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      }
+    }
+  },
+  {
+    "detector": "threshold",
+    "dataset_version": "v4",
+    "precision": 0.9921875,
+    "recall": 0.49609375,
+    "f1": 0.6614583333333334,
+    "false_positive_rate": 3.798237617745366e-05,
+    "detection_delay_p50_s": 40.0,
+    "detection_delay_p95_s": 40.0,
+    "detection_delay_p99_s": 40.0,
+    "n_episodes": 27,
+    "seed": 42,
+    "notes": "simulator data, practice only, not for the thesis",
+    "extra": {
+      "true_positives": 127,
+      "false_positives": 1,
+      "true_negatives": 26327,
+      "false_negatives": 129,
+      "train_windows": 122433,
+      "test_windows": 26584,
+      "episodes_detected": 22,
+      "episode_detection_rate": 0.8148148148148148,
+      "delay_samples": 22
+    },
+    "by_shape": {
+      "cpu_hog": {
+        "episodes": 1.0,
+        "detected": 1.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "intermittent": {
+        "episodes": 15.0,
+        "detected": 15.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "latency": {
+        "episodes": 2.0,
+        "detected": 1.0,
+        "detection_rate": 0.5,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "pause": {
+        "episodes": 1.0,
+        "detected": 1.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "region_down": {
+        "episodes": 2.0,
+        "detected": 2.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "small_step": {
+        "episodes": 4.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "stop": {
+        "episodes": 2.0,
+        "detected": 2.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      }
     }
   },
   {
     "detector": "iforest",
-    "dataset_version": "v3",
-    "precision": 0.2768166089965398,
-    "recall": 0.6779661016949152,
-    "f1": 0.39312039312039315,
-    "false_positive_rate": 0.024072794287030637,
-    "detection_delay_p50_s": 120.0,
-    "detection_delay_p95_s": 120.0,
-    "detection_delay_p99_s": 120.0,
-    "n_episodes": 19,
+    "dataset_version": "v4",
+    "precision": 0.5071942446043165,
+    "recall": 0.55078125,
+    "f1": 0.5280898876404494,
+    "false_positive_rate": 0.005203585536311152,
+    "detection_delay_p50_s": 40.0,
+    "detection_delay_p95_s": 40.0,
+    "detection_delay_p99_s": 72.00000000000003,
+    "n_episodes": 27,
     "seed": 42,
     "notes": "simulator data, practice only, not for the thesis",
     "extra": {
-      "true_positives": 80,
-      "false_positives": 209,
-      "true_negatives": 8473,
-      "false_negatives": 38,
-      "train_windows": 40331,
-      "test_windows": 8800,
-      "episodes_detected": 19,
-      "episode_detection_rate": 1.0,
-      "delay_samples": 19
+      "true_positives": 141,
+      "false_positives": 137,
+      "true_negatives": 26191,
+      "false_negatives": 115,
+      "train_windows": 122433,
+      "test_windows": 26584,
+      "episodes_detected": 21,
+      "episode_detection_rate": 0.7777777777777778,
+      "delay_samples": 21
+    },
+    "by_shape": {
+      "cpu_hog": {
+        "episodes": 1.0,
+        "detected": 1.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 80.0,
+        "delay_p95_s": 80.0,
+        "delay_p99_s": 80.0
+      },
+      "intermittent": {
+        "episodes": 15.0,
+        "detected": 14.0,
+        "detection_rate": 0.9333333333333333,
+        "delay_p50_s": 0.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "latency": {
+        "episodes": 2.0,
+        "detected": 1.0,
+        "detection_rate": 0.5,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "pause": {
+        "episodes": 1.0,
+        "detected": 1.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "region_down": {
+        "episodes": 2.0,
+        "detected": 2.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      },
+      "small_step": {
+        "episodes": 4.0,
+        "detected": 0.0,
+        "detection_rate": 0.0,
+        "delay_p50_s": NaN,
+        "delay_p95_s": NaN,
+        "delay_p99_s": NaN
+      },
+      "stop": {
+        "episodes": 2.0,
+        "detected": 2.0,
+        "detection_rate": 1.0,
+        "delay_p50_s": 40.0,
+        "delay_p95_s": 40.0,
+        "delay_p99_s": 40.0
+      }
     }
   }
 ]

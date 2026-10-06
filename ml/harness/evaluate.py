@@ -140,7 +140,10 @@ def dataset_dir(dataset_version: str, root: Path = DEFAULT_DATASET_ROOT) -> Path
 
 
 def load_manifest(dataset_version: str, root: Path = DEFAULT_DATASET_ROOT) -> dict[str, Any]:
-    return json.loads((dataset_dir(dataset_version, root) / "manifest.json").read_text())
+    manifest: dict[str, Any] = json.loads(
+        (dataset_dir(dataset_version, root) / "manifest.json").read_text()
+    )
+    return manifest
 
 
 def load_fault_intervals(

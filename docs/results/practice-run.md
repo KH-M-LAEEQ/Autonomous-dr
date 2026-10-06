@@ -9,11 +9,11 @@ Nothing here belongs in the thesis.
 
 ## Dataset
 
-- Version: `v3`, seed `42`
-- Episodes: 120, windows: 58608
-- Metric list: 20 signals, sha `51ba8da8a0e71f98`
-- Fault mix: cpu_hog x28, latency x23, pause x21, region_down x21, stop x27
-- Generated: 2026-10-06 by `ml/datasets/make_episodes.py` at commit `f49167f38d51`
+- Version: `v4`, seed `42`
+- Episodes: 150, windows: 177184
+- Metric list: 25 signals, sha `7fad93b7e4f8cbd3`
+- Fault mix: cpu_hog x81, cpu_ramp x8, cpu_step_small x10, latency x15, pause x18, region_down x11, stop x7
+- Generated: 2026-10-06 by `ml/datasets/make_episodes.py` at commit `055935b6241b`
 - Fault store: `memory`
 
 Split is ADR-0008 70/15/15, chronological, never shuffled, applied
@@ -22,10 +22,15 @@ last 15%.
 
 ## Results
 
+`threshold_unscaled` is the BEFORE row: the baseline's pre-fix rule, run
+by this same harness on this same dataset, so the comparison isolates the
+per-signal scaling rather than quoting an old number from a different run.
+
 | Detector | Precision | Recall | F1 | FPR | Delay p50 | Delay p95 | Delay p99 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `threshold` | 0.000 | 0.000 | 0.000 | 0.000 | n/a | n/a | n/a |
-| `iforest` | 0.277 | 0.678 | 0.393 | 0.024 | 120s | 120s | 120s |
+| `threshold_unscaled` | 0.000 | 0.000 | 0.000 | 0.000 | n/a | n/a | n/a |
+| `threshold` | 0.992 | 0.496 | 0.661 | 0.000 | 40s | 40s | 40s |
+| `iforest` | 0.507 | 0.551 | 0.528 | 0.005 | 40s | 40s | 72s |
 
 Window-level precision/recall/F1/FPR. Delay is per fault episode, measured
 from the fault's exact start to the first alarm, in seconds.
@@ -34,8 +39,39 @@ from the fault's exact start to the first alarm, in seconds.
 
 | Detector | TP | FP | TN | FN | Train win. | Test win. | Episodes in test | Episodes detected | Delay samples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `threshold` | 0 | 0 | 8682 | 118 | 40331 | 8800 | 19 | 0 | 0 |
-| `iforest` | 80 | 209 | 8473 | 38 | 40331 | 8800 | 19 | 19 | 19 |
+| `threshold_unscaled` | 0 | 0 | 26328 | 256 | 122433 | 26584 | 27 | 0 | 0 |
+| `threshold` | 127 | 1 | 26327 | 129 | 122433 | 26584 | 27 | 22 | 22 |
+| `iforest` | 141 | 137 | 26191 | 115 | 122433 | 26584 | 27 | 21 | 21 |
+
+## Per fault shape
+
+Pooled numbers average an easy shape and a subtle one into a figure
+that describes neither. `detected` is episodes caught / episodes in the
+test slice; delays are seconds from the fault's exact start.
+
+| Shape | Detector | Episodes | Detected | Rate | p50 | p95 | p99 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `cpu_hog` | `threshold_unscaled` | 1 | 0 | 0.000 | n/a | n/a | n/a |
+| `cpu_hog` | `threshold` | 1 | 1 | 1.000 | 40s | 40s | 40s |
+| `cpu_hog` | `iforest` | 1 | 1 | 1.000 | 80s | 80s | 80s |
+| `intermittent` | `threshold_unscaled` | 15 | 0 | 0.000 | n/a | n/a | n/a |
+| `intermittent` | `threshold` | 15 | 15 | 1.000 | 40s | 40s | 40s |
+| `intermittent` | `iforest` | 15 | 14 | 0.933 | 0s | 40s | 40s |
+| `latency` | `threshold_unscaled` | 2 | 0 | 0.000 | n/a | n/a | n/a |
+| `latency` | `threshold` | 2 | 1 | 0.500 | 40s | 40s | 40s |
+| `latency` | `iforest` | 2 | 1 | 0.500 | 40s | 40s | 40s |
+| `pause` | `threshold_unscaled` | 1 | 0 | 0.000 | n/a | n/a | n/a |
+| `pause` | `threshold` | 1 | 1 | 1.000 | 40s | 40s | 40s |
+| `pause` | `iforest` | 1 | 1 | 1.000 | 40s | 40s | 40s |
+| `region_down` | `threshold_unscaled` | 2 | 0 | 0.000 | n/a | n/a | n/a |
+| `region_down` | `threshold` | 2 | 2 | 1.000 | 40s | 40s | 40s |
+| `region_down` | `iforest` | 2 | 2 | 1.000 | 40s | 40s | 40s |
+| `small_step` | `threshold_unscaled` | 4 | 0 | 0.000 | n/a | n/a | n/a |
+| `small_step` | `threshold` | 4 | 0 | 0.000 | n/a | n/a | n/a |
+| `small_step` | `iforest` | 4 | 0 | 0.000 | n/a | n/a | n/a |
+| `stop` | `threshold_unscaled` | 2 | 0 | 0.000 | n/a | n/a | n/a |
+| `stop` | `threshold` | 2 | 2 | 1.000 | 40s | 40s | 40s |
+| `stop` | `iforest` | 2 | 2 | 1.000 | 40s | 40s | 40s |
 
 ## What this run actually found
 
@@ -84,20 +120,20 @@ Any future dataset must span several full cycles before it is split.
   hysteresis** (Tukey IQR fence on training scores). That is deliberate, so
   the comparison isolates the scoring method. It also means neither is tuned.
 - **No cross-validation, no hyperparameter search.** One seed, one split.
-- **The collector step here is 60s, not
+- **The collector step here is 20s, not
   production's 10s.** That was the trade-off for spanning several full
   seasonality cycles without a multi-gigabyte window file (see finding 2).
   It coarsens delay resolution to one step, which is why the floor is
-  180s rather than 30s.
-- **The 70/15/15 vs 70/30 split inconsistency** between ADR-0008 and
-  `ml/harness/evaluate.py`'s own rule 1 is unresolved; this run used
-  70/15/15. Resolving it changes the test-set size.
+  60s rather than 30s.
+- **The split is 70/15/15** (ADR-0008, `docs/formulas.md` section 2). The
+  val slice is reserved for early stopping and has no consumer yet, so the
+  test slice is the last 15% only.
 - **Generated telemetry has a seasonality curve but no multi-day drift,**
   and no provider-specific noise at all.
 
 Regenerate with:
 
 ```
-python -m ml.datasets.make_episodes --seed 42 --episodes 120 --version v3 --fault-store memory
-python -m ml.harness.evaluate --dataset-version v3
+python -m ml.datasets.make_episodes --seed 42 --episodes 150 --version v4 --fault-store memory
+python -m ml.harness.evaluate --dataset-version v4
 ```
