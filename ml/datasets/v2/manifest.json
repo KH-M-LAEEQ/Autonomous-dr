@@ -1,0 +1,50 @@
+{
+  "version": "v2",
+  "seed": 42,
+  "metric_list_version": {
+    "source": "core.signals.CANONICAL_SIGNALS",
+    "count": 20,
+    "sha256": "51ba8da8a0e71f98"
+  },
+  "created": "2026-10-06",
+  "episode_count": 60,
+  "window_count": 40384,
+  "generator": "ml/datasets/make_episodes.py",
+  "generator_commit": "f49167f38d51a2caaaaae16fb837170cb72ba270",
+  "fault_store": "memory",
+  "virtual_clock": {
+    "start": "2026-01-01T00:00:00+00:00",
+    "end": "2026-01-01T14:03:10+00:00",
+    "step_seconds": 10
+  },
+  "window_samples": 12,
+  "schedule": {
+    "normal_minutes": 10.0,
+    "fault_seconds_min": 60,
+    "fault_seconds_max": 180,
+    "recover_minutes": 2.0
+  },
+  "fault_type_distribution": {
+    "cpu_hog": 11,
+    "latency": 12,
+    "pause": 11,
+    "region_down": 11,
+    "stop": 15
+  },
+  "resources": [
+    "sim-cache-1",
+    "sim-db-1",
+    "sim-db-2",
+    "sim-lb-1",
+    "sim-web-1",
+    "sim-web-2",
+    "sim-web-3",
+    "sim-worker-1"
+  ],
+  "notes": [
+    "Simulator data. Practice only -- not thesis material.",
+    "Fault windows are bounded by clear_fault, not by the Redis TTL.",
+    "region_down labels list every affected resource, not just the target.",
+    "Telemetry is reproducible from `seed` alone, given the same metric list."
+  ]
+}

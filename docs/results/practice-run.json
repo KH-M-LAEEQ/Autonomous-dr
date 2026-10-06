@@ -1,0 +1,52 @@
+[
+  {
+    "detector": "threshold",
+    "dataset_version": "v3",
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "false_positive_rate": 0.0,
+    "detection_delay_p50_s": NaN,
+    "detection_delay_p95_s": NaN,
+    "detection_delay_p99_s": NaN,
+    "n_episodes": 19,
+    "seed": 42,
+    "notes": "simulator data, practice only, not for the thesis",
+    "extra": {
+      "true_positives": 0,
+      "false_positives": 0,
+      "true_negatives": 8682,
+      "false_negatives": 118,
+      "train_windows": 40331,
+      "test_windows": 8800,
+      "episodes_detected": 0,
+      "episode_detection_rate": 0.0,
+      "delay_samples": 0
+    }
+  },
+  {
+    "detector": "iforest",
+    "dataset_version": "v3",
+    "precision": 0.2768166089965398,
+    "recall": 0.6779661016949152,
+    "f1": 0.39312039312039315,
+    "false_positive_rate": 0.024072794287030637,
+    "detection_delay_p50_s": 120.0,
+    "detection_delay_p95_s": 120.0,
+    "detection_delay_p99_s": 120.0,
+    "n_episodes": 19,
+    "seed": 42,
+    "notes": "simulator data, practice only, not for the thesis",
+    "extra": {
+      "true_positives": 80,
+      "false_positives": 209,
+      "true_negatives": 8473,
+      "false_negatives": 38,
+      "train_windows": 40331,
+      "test_windows": 8800,
+      "episodes_detected": 19,
+      "episode_detection_rate": 1.0,
+      "delay_samples": 19
+    }
+  }
+]
