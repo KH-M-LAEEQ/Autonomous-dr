@@ -144,6 +144,7 @@ def _write_dataset(root: Path, resources: list[str], n_normal: int = 60) -> None
 
     label = {
         "episode": 0,
+        "shape": "test_shape",
         "fault_type": "region_down",
         "target": resources[0],
         "tenant_id": "t1",
@@ -214,6 +215,32 @@ def test_evaluate_reports_p99_delay_field(tmp_path: Path) -> None:
     assert hasattr(result, "detection_delay_p99_s")
     delay = result.detection_delay_p99_s
     assert math.isnan(delay) or delay >= 0.0
+
+
+def test_evaluate_reports_a_per_shape_breakdown(tmp_path: Path) -> None:
+    """Pooled numbers hide the thing worth knowing, so each shape gets its own
+    row keyed by `labels.jsonl`'s `shape`."""
+    _write_dataset(tmp_path, ["r1", "r2"])
+    result = evaluate("threshold", "vtest", tmp_path)
+    assert set(result.by_shape) == {"test_shape"}
+    row = result.by_shape["test_shape"]
+    assert row["episodes"] >= 1
+    assert row["detected"] <= row["episodes"]
+    assert 0.0 <= row["detection_rate"] <= 1.0
+    assert set(row) >= {"delay_p50_s", "delay_p95_s", "delay_p99_s"}
+
+
+def test_shape_falls_back_to_fault_type_for_pre_shape_datasets(tmp_path: Path) -> None:
+    """v1-v3 predate shapes. Their labels must still group, not crash."""
+    _write_dataset(tmp_path, ["r1"])
+    labels_path = tmp_path / "vtest" / "labels.jsonl"
+    rows = [json.loads(line) for line in labels_path.read_text().splitlines() if line.strip()]
+    for row in rows:
+        row.pop("shape")
+    labels_path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    intervals = load_fault_intervals("vtest", tmp_path)
+    assert intervals["r1"][0].shape == "region_down"
 
 
 def test_evaluate_trains_only_on_normal_windows(tmp_path: Path) -> None:

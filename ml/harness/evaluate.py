@@ -79,6 +79,10 @@ class EvalResult:
     seed: int = 0
     notes: str = ""
     extra: dict[str, float] = field(default_factory=dict)
+    #: Per fault-shape breakdown, keyed by `labels.jsonl`'s `shape`. Pooled
+    #: numbers hide the thing worth knowing: an easy shape and a subtle one
+    #: average into a figure that describes neither.
+    by_shape: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 def time_based_split(
@@ -120,6 +124,9 @@ class FaultInterval:
     fault_type: str
     start: datetime
     end: datetime
+    #: How the fault was driven over time. Older datasets (v1-v3) predate
+    #: shapes, so they fall back to the fault type.
+    shape: str = "unknown"
 
 
 def dataset_dir(dataset_version: str, root: Path = DEFAULT_DATASET_ROOT) -> Path:
@@ -157,16 +164,33 @@ def load_fault_intervals(
                 "fault_type": row["fault_type"],
                 "start": datetime.fromisoformat(row["start"]),
                 "end": datetime.fromisoformat(row["end"]),
+                "shape": row.get("shape", row["fault_type"]),
             }
             for resource_id in row["affected"]:
                 intervals.setdefault(resource_id, []).append(FaultInterval(**interval_args))
     return intervals
 
 
-def _iter_windows(windows_path: Path, resource_id: str) -> Iterator[MetricWindow]:
+def _iter_windows(
+    windows_path: Path, resource_id: str, *, use_prefilter: bool = True
+) -> Iterator[MetricWindow]:
+    """Windows for one resource, streamed.
+
+    `use_prefilter` skips lines that cannot mention this resource with a
+    substring test before paying for `json.loads`. At realistic dataset sizes
+    the file is re-read once per resource per detector, so this is the
+    difference between seconds and minutes. It is only ever an optimisation:
+    the parsed row is still checked, and `load_windows_for_resource` re-runs
+    the scan without it if the fast path finds nothing, so a future generator
+    that formats JSON differently degrades in speed rather than silently
+    returning an empty dataset.
+    """
+    needle = f'"resource_id": "{resource_id}"'
     with windows_path.open(encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
+                continue
+            if use_prefilter and needle not in line:
                 continue
             row = json.loads(line)
             if row["resource_id"] != resource_id:
@@ -187,7 +211,15 @@ def load_windows_for_resource(
     """Chronological windows for one resource. Sorted explicitly rather than
     trusting file order -- a future generator may interleave differently."""
     path = dataset_dir(dataset_version, root) / "windows.jsonl"
-    return sorted(_iter_windows(path, resource_id), key=lambda w: w.end)
+    windows = sorted(_iter_windows(path, resource_id), key=lambda w: w.end)
+    if not windows:
+        # Either the resource genuinely has no windows, or the substring fast
+        # path missed because the file is formatted differently. Re-scan the
+        # slow, always-correct way before believing the empty answer.
+        windows = sorted(
+            _iter_windows(path, resource_id, use_prefilter=False), key=lambda w: w.end
+        )
+    return windows
 
 
 # -- scoring ---------------------------------------------------------------
@@ -212,6 +244,9 @@ class _Tally:
     delays_s: list[float] = field(default_factory=list)
     episodes_in_test: int = 0
     episodes_detected: int = 0
+    delays_by_shape: dict[str, list[float]] = field(default_factory=dict)
+    episodes_by_shape: dict[str, int] = field(default_factory=dict)
+    detected_by_shape: dict[str, int] = field(default_factory=dict)
 
 
 def _score_resource(
@@ -258,8 +293,17 @@ def _score_resource(
     by_episode = {i.episode: i for i in intervals}
     tally.episodes_in_test += len(episodes_seen)
     tally.episodes_detected += len(first_alarm)
+    for episode in episodes_seen:
+        shape = by_episode[episode].shape
+        tally.episodes_by_shape[shape] = tally.episodes_by_shape.get(shape, 0) + 1
     for episode, alarm_at in first_alarm.items():
-        tally.delays_s.append((alarm_at - by_episode[episode].start).total_seconds())
+        interval = by_episode[episode]
+        delay = (alarm_at - interval.start).total_seconds()
+        tally.delays_s.append(delay)
+        tally.delays_by_shape.setdefault(interval.shape, []).append(delay)
+        tally.detected_by_shape[interval.shape] = (
+            tally.detected_by_shape.get(interval.shape, 0) + 1
+        )
 
 
 def evaluate(
@@ -320,6 +364,19 @@ def evaluate(
             ),
             "delay_samples": len(tally.delays_s),
         },
+        by_shape={
+            shape: {
+                "episodes": float(count),
+                "detected": float(tally.detected_by_shape.get(shape, 0)),
+                "detection_rate": (
+                    tally.detected_by_shape.get(shape, 0) / count if count else 0.0
+                ),
+                "delay_p50_s": _percentile(tally.delays_by_shape.get(shape, []), 50),
+                "delay_p95_s": _percentile(tally.delays_by_shape.get(shape, []), 95),
+                "delay_p99_s": _percentile(tally.delays_by_shape.get(shape, []), 99),
+            }
+            for shape, count in sorted(tally.episodes_by_shape.items())
+        },
     )
 
 
@@ -354,8 +411,16 @@ def render_markdown(results: list[EvalResult], manifest: dict[str, Any]) -> str:
         f"- Episodes: {manifest['episode_count']}, windows: {manifest['window_count']}",
         f"- Metric list: {manifest['metric_list_version']['count']} signals, "
         f"sha `{manifest['metric_list_version']['sha256']}`",
-        "- Fault mix: "
-        + ", ".join(f"{k} x{v}" for k, v in manifest["fault_type_distribution"].items()),
+        "- Shape mix: "
+        + ", ".join(
+            f"{k} x{v}"
+            for k, v in (
+                manifest.get("shape_distribution") or manifest["fault_type_distribution"]
+            ).items()
+        ),
+        f"- Collector step: {manifest['virtual_clock']['step_seconds']}s, "
+        f"window {manifest['window_samples']} samples "
+        f"({manifest['virtual_clock']['step_seconds'] * manifest['window_samples']}s)",
         f"- Generated: {manifest['created']} by `{manifest['generator']}` "
         f"at commit `{manifest['generator_commit'][:12]}`",
         f"- Fault store: `{manifest['fault_store']}`",
@@ -365,6 +430,10 @@ def render_markdown(results: list[EvalResult], manifest: dict[str, Any]) -> str:
         "last 15%.",
         "",
         "## Results",
+        "",
+        "`threshold_unscaled` is the BEFORE row: the baseline's pre-fix rule, run",
+        "by this same harness on this same dataset, so the comparison isolates the",
+        "per-signal scaling rather than quoting an old number from a different run.",
         "",
         "| Detector | Precision | Recall | F1 | FPR | Delay p50 | Delay p95 | Delay p99 |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -396,51 +465,84 @@ def render_markdown(results: list[EvalResult], manifest: dict[str, Any]) -> str:
             f"| {r.n_episodes} | {e['episodes_detected']:.0f} | {e['delay_samples']:.0f} |"
         )
 
+    shapes = sorted({s for r in results for s in r.by_shape})
+    if shapes:
+        lines += [
+            "",
+            "## Per fault shape",
+            "",
+            "Pooled numbers average an easy shape and a subtle one into a figure",
+            "that describes neither. `detected` is episodes caught / episodes in the",
+            "test slice; delays are seconds from the fault's exact start.",
+            "",
+            "| Shape | Detector | Episodes | Detected | Rate | p50 | p95 | p99 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for shape in shapes:
+            for r in results:
+                row = r.by_shape.get(shape)
+                if not row:
+                    continue
+                lines.append(
+                    f"| `{shape}` | `{r.detector}` | {row['episodes']:.0f} "
+                    f"| {row['detected']:.0f} | {_fmt(row['detection_rate'])} "
+                    f"| {_fmt_s(row['delay_p50_s'])} | {_fmt_s(row['delay_p95_s'])} "
+                    f"| {_fmt_s(row['delay_p99_s'])} |"
+                )
+
     lines += [
         "",
         "## What this run actually found",
         "",
-        "Two things worth acting on, both more useful than the numbers themselves.",
+        "**1. The threshold baseline was silent, and the cause was unit scale.**",
+        "FIXED — the `threshold_unscaled` row above is the old behaviour, measured",
+        "on this same dataset.",
         "",
-        "**1. The threshold baseline never fires at all.** Zero true positives and",
-        "zero false positives across the whole test slice — it is silent, not",
-        "inaccurate. The cause is that `ThresholdDetector._residual` takes the",
-        "largest *absolute* per-signal deviation from the training mean, across",
-        "signals whose units span six orders of magnitude. The byte-rate signals",
-        "(`network_*_bytes_per_s`, baseline in the millions) dominate it, so the",
-        "fitted IQR fence lands around 4.1e6. A `cpu_hog` fault moves `cpu_pct` by",
-        "~67 — which cannot cross a fence of four million no matter how severe the",
-        "fault is. Only a byte-rate collapse could, and not reliably.",
+        "The pre-fix rule took the largest *absolute* per-signal deviation from a",
+        "training mean, across signals whose units span six orders of magnitude.",
+        "The byte-rate signals (`net_in_bytes`, `net_out_bytes`, baselines in the",
+        "millions) set the IQR fence, so it landed around 4.1e6. A `cpu_hog` fault",
+        "moves `cpu_percent` by ~67 points, which cannot cross a fence of four",
+        "million however severe the fault is. The detector was therefore silent",
+        "rather than inaccurate: zero true positives AND zero false positives.",
         "",
-        "This is pre-existing behaviour, not a regression from the interface-freeze",
-        "adaptation: `_residual` is unchanged, and the old `IQRThreshold` strategy",
-        "computed the identical fence. The fix is a normalisation decision (per-signal",
-        "z-score or min-max before taking the max deviation) and it changes the",
-        "project's permanent baseline detector, so it needs a decision rather than a",
-        "quiet patch.",
+        "This was pre-existing behaviour, not a regression from the interface-freeze",
+        "adaptation — `_residual` was unchanged and the old `IQRThreshold` strategy",
+        "computed the identical fence. The fix divides each signal by its own",
+        "training interquartile range first, so every signal contributes on a",
+        "comparable \"how unusual is this for *this* signal\" scale and a max() across",
+        "them is meaningful. Median and IQR rather than mean and standard deviation,",
+        "because both are robust to a contaminated training window. A zero-spread",
+        "signal (`health_check_pass` is 1.0 in every normal window) falls back to its",
+        "own magnitude instead of dividing by zero.",
         "",
         "**2. A dataset shorter than one seasonality cycle makes a chronological",
-        "split meaningless.** The first attempt used a 14-hour run. Because the",
-        "simulator's load follows a daily curve, the 70% train slice covered the",
-        "low-load small hours and the test slice the busy afternoon: `cpu_pct` mean",
-        "18.3 in train versus 43.0 in test-normal windows, `network_in` 2.0M versus",
+        "split meaningless.** An early 14-hour run put the 70% train slice in the",
+        "low-load small hours and the test slice in the busy afternoon: `cpu` mean",
+        "18.3 in train versus 43.0 in test-normal windows, inbound bytes 2.0M versus",
         "4.9M. Isolation Forest correctly flagged 75% of *normal* test windows as",
         "unlike training, giving a 39.5% false-positive rate that measured the",
-        "confound, not the detector. Regenerating across 5.1 virtual days — so the",
-        "train slice spans ~3.6 full cycles and has seen every phase — dropped the",
-        "same detector's false-positive rate to the value in the table above.",
-        "Any future dataset must span several full cycles before it is split.",
+        "confound rather than the detector. Every dataset since spans several full",
+        "cycles, so the train slice has seen every phase of the daily curve. Any",
+        "future dataset must do the same before it is split.",
         "",
         "## Read this before quoting any number above",
         "",
         "- **Simulator faults are extreme.** `stop`, `pause` and `region_down` zero",
         "  every signal and pin error rate to 100%. Detecting that is not evidence a",
         "  detector can find a subtle real-world degradation.",
-        "- **The delay distribution is degenerate here.** Every detected episode was",
-        "  caught at exactly the hysteresis floor (3 breaches x the collector step),",
-        "  so p50, p95 and p99 are the same number. That says the faults are trivially",
-        "  obvious, not that the detector is precise. p95/p99 are proof the metric is",
-        "  computed, not measurements of anything.",
+        "- **Check the delay spread before quoting it.** If p50, p95 and p99 are the",
+        f"  same number, every episode was caught at the hysteresis floor "
+        f"({3 * manifest['virtual_clock']['step_seconds']}s here: 3 breaches x the",
+        "  collector step) and the distribution carries no information — it says the",
+        "  faults were trivially obvious, not that the detector is precise. The",
+        "  per-shape table above is where that shows up.",
+        "- **`intermittent` bursts are near the hysteresis limit by construction.** A",
+        f"  burst of {manifest.get('shape_schedule', {}).get('intermittent_on_minutes', 1)} "
+        f"minute(s) is only a few collector steps, and 3 consecutive breaches are",
+        "  required, so a burst shorter than 3 steps is structurally undetectable. A",
+        "  low detection rate on that shape is a property of the rule, not a failure",
+        "  of the scorer.",
         "- **Both detectors share the same cutoff rule and the same 3-breach",
         "  hysteresis** (Tukey IQR fence on training scores). That is deliberate, so",
         "  the comparison isolates the scoring method. It also means neither is tuned.",
@@ -473,28 +575,44 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Score detectors on a generated dataset.")
     parser.add_argument("--dataset-version", default="v1")
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
-    parser.add_argument("--detectors", nargs="+", default=["threshold", "iforest"])
+    parser.add_argument(
+        "--detectors", nargs="+", default=["threshold_unscaled", "threshold", "iforest"]
+    )
     parser.add_argument("--out", type=Path, default=Path("docs/results/practice-run.md"))
     parser.add_argument("--json-out", type=Path, default=None)
+    parser.add_argument(
+        "--render-from",
+        type=Path,
+        default=None,
+        help="re-render the markdown from a previous --json-out instead of "
+        "re-scoring. Scoring reads the whole window file once per resource per "
+        "detector, so this is the cheap path when only the prose changed.",
+    )
     args = parser.parse_args(argv)
 
     manifest = load_manifest(args.dataset_version, args.dataset_root)
     results: list[EvalResult] = []
-    for name in args.detectors:
-        print(f"scoring {name} on {args.dataset_version} ...")
-        result = evaluate(name, args.dataset_version, args.dataset_root)
-        results.append(result)
-        print(
-            f"  precision={result.precision:.3f} recall={result.recall:.3f} "
-            f"f1={result.f1:.3f} fpr={result.false_positive_rate:.3f} "
-            f"delay_p50={result.detection_delay_p50_s:.0f}s"
-        )
+    if args.render_from:
+        for row in json.loads(args.render_from.read_text()):
+            results.append(EvalResult(**row))
+        print(f"re-rendering {len(results)} result(s) from {args.render_from}")
+    else:
+        for name in args.detectors:
+            print(f"scoring {name} on {args.dataset_version} ...", flush=True)
+            result = evaluate(name, args.dataset_version, args.dataset_root)
+            results.append(result)
+            print(
+                f"  precision={result.precision:.3f} recall={result.recall:.3f} "
+                f"f1={result.f1:.3f} fpr={result.false_positive_rate:.3f} "
+                f"delay_p50={result.detection_delay_p50_s:.0f}s",
+                flush=True,
+            )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(render_markdown(results, manifest), encoding="utf-8", newline="\n")
     print(f"\nwrote {args.out}")
 
-    if args.json_out:
+    if args.json_out and not args.render_from:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(
             json.dumps([asdict(r) for r in results], indent=2) + "\n",

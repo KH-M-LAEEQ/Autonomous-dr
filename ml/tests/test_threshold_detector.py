@@ -227,6 +227,42 @@ def test_absent_signals_are_skipped_not_imputed() -> None:
     assert detector.explain()["signals_scored"] == 1
 
 
+# -- the BEFORE detector ---------------------------------------------------
+
+
+def test_unscaled_variant_is_registered_for_the_before_row() -> None:
+    from ml.detectors.threshold import UnscaledThresholdDetector
+
+    detector = build("threshold_unscaled")
+    assert isinstance(detector, UnscaledThresholdDetector)
+    assert detector.name == "threshold_unscaled"
+
+
+def test_unscaled_variant_cannot_be_selected_by_config() -> None:
+    """It exists to document a regression, not to be run in production."""
+    import typing
+
+    from core.config import Settings
+
+    allowed = typing.get_args(Settings.model_fields["detector"].annotation)
+    assert "threshold_unscaled" not in allowed
+    assert "threshold" in allowed
+
+
+def test_unscaled_variant_reproduces_the_scale_domination_bug() -> None:
+    """A cpu spike must be invisible to it: that is the whole finding. Its fence
+    is set by byte-rate noise, orders of magnitude above anything cpu can
+    reach."""
+    detector = build("threshold_unscaled")
+    assert isinstance(detector, ThresholdDetector)
+    detector.fit(_training())
+
+    assert detector.decision_threshold > 100_000, "fence should be byte-rate scale"
+    assert not _trips(detector, lambda: _window(cpu=97.0), n=10)
+    # And the fixed detector does catch the same spike.
+    assert _trips(_fitted(), lambda: _window(cpu=97.0))
+
+
 def test_explain_reports_the_offending_signal_and_its_scale() -> None:
     detector = _fitted()
     detector.is_anomaly(_window(cpu=97.0))

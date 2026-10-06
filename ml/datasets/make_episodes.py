@@ -75,10 +75,32 @@ _LABEL_SCHEMA: dict[str, Any] = {
         "resource listed in `affected` is anomalous; everything else is normal."
     ),
     "type": "object",
-    "required": ["episode", "fault_type", "target", "affected", "start", "end"],
+    "required": ["episode", "shape", "fault_type", "target", "affected", "start", "end"],
     "additionalProperties": False,
     "properties": {
-        "episode": {"type": "integer", "minimum": 0},
+        "episode": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "unique per label row across the dataset -- what the harness keys "
+                "detection delay on. An `intermittent` episode emits one row per ON "
+                "burst, so these do not map 1:1 onto scheduled_episode."
+            ),
+        },
+        "scheduled_episode": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "index of the generator's episode loop that produced this row",
+        },
+        "shape": {
+            "type": "string",
+            "description": "how the fault was driven over time",
+        },
+        "burst": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0 for single-span shapes; the ON-burst index for intermittent",
+        },
         "fault_type": {"type": "string", "enum": list(FAULT_TYPES)},
         "target": {"type": "string", "description": "resource the fault was injected against"},
         "tenant_id": {"type": "string"},
@@ -280,6 +302,131 @@ async def _phase(
     return written
 
 
+#: Episode shapes. The first five drive a single constant fault and are
+#: trivially detectable -- `stop`/`pause`/`region_down` zero every signal. The
+#: last three exist because "the detector caught a total outage" says nothing
+#: about a detector, and the v3 practice run produced a degenerate delay
+#: distribution (every episode caught at exactly the hysteresis floor) for
+#: precisely that reason.
+CLASSIC_SHAPES: tuple[str, ...] = ("cpu_hog", "latency", "stop", "pause", "region_down")
+SUBTLE_SHAPES: tuple[str, ...] = ("gradual_ramp", "small_step", "intermittent")
+ALL_SHAPES: tuple[str, ...] = (*CLASSIC_SHAPES, *SUBTLE_SHAPES)
+
+Span = tuple[datetime, datetime]
+# A shape runner advances the clock by n ticks and returns windows written.
+PhaseRunner = Any
+
+
+def _phase_runner(
+    provider: SimulatedProvider,
+    resources: list[Resource],
+    clock: _VirtualClock,
+    history: dict[str, dict[str, list[float]]],
+    windows_out: IO[str],
+    args: argparse.Namespace,
+) -> PhaseRunner:
+    """Binds the long `_phase` argument list once per episode."""
+
+    async def run(ticks: int) -> int:
+        return await _phase(
+            ticks,
+            provider,
+            resources,
+            clock,
+            history,
+            windows_out,
+            args.step_seconds,
+            args.window_samples,
+        )
+
+    run.clock = clock  # type: ignore[attr-defined]
+    return run
+
+
+async def _run_constant(
+    provider: SimulatedProvider,
+    target: Resource,
+    fault_type: str,
+    run: PhaseRunner,
+    seconds: int,
+    args: argparse.Namespace,
+) -> tuple[Span, int]:
+    """One fault, held at constant severity for the whole span."""
+    clock: _VirtualClock = run.clock
+    ticks = max(1, seconds // args.step_seconds)
+    provider.inject_fault(target.id, fault_type, _FAULT_TTL_SECONDS)
+    start = clock.value
+    written = await run(ticks)
+    end = clock.value
+    faults.clear_fault(target.id)
+    return (start, end), written
+
+
+async def _run_ramp(
+    provider: SimulatedProvider,
+    target: Resource,
+    run: PhaseRunner,
+    args: argparse.Namespace,
+) -> tuple[Span, int]:
+    """CPU climbs from baseline to cpu_hog severity across `--ramp-minutes`.
+
+    The fault is re-injected every tick with a rising `intensity`, which is how
+    a gradual fault advances through the one-string Redis fault API. The early
+    ticks sit inside normal noise on purpose: a detector that only trips on
+    extremes should be LATE here, which is the whole point of the shape.
+    """
+    clock: _VirtualClock = run.clock
+    ticks = max(1, int(args.ramp_minutes * 60) // args.step_seconds)
+    start = clock.value
+    written = 0
+    for tick in range(ticks):
+        provider.inject_fault(
+            target.id,
+            "cpu_ramp",
+            _FAULT_TTL_SECONDS,
+            intensity=(tick + 1) / ticks,
+        )
+        written += await run(1)
+    end = clock.value
+    faults.clear_fault(target.id)
+    return (start, end), written
+
+
+async def _run_intermittent(
+    provider: SimulatedProvider,
+    target: Resource,
+    run: PhaseRunner,
+    args: argparse.Namespace,
+) -> tuple[list[Span], int]:
+    """`--intermittent-on` on, `--intermittent-off` off, for
+    `--intermittent-minutes`.
+
+    Each ON burst is its own label row, so the OFF gaps are correctly labelled
+    normal -- marking the whole window faulty would score a detector's correct
+    silence during a gap as a miss. Bursts are short relative to the detector's
+    3-breach hysteresis, which is deliberate: a burst shorter than 3 collector
+    steps is structurally undetectable, and that bound is worth measuring
+    rather than assuming.
+    """
+    clock: _VirtualClock = run.clock
+    on_ticks = max(1, int(args.intermittent_on * 60) // args.step_seconds)
+    off_ticks = max(1, int(args.intermittent_off * 60) // args.step_seconds)
+    cycle_minutes = args.intermittent_on + args.intermittent_off
+    cycles = max(1, int(args.intermittent_minutes // cycle_minutes))
+
+    spans: list[Span] = []
+    written = 0
+    for cycle in range(cycles):
+        provider.inject_fault(target.id, "cpu_hog", _FAULT_TTL_SECONDS)
+        start = clock.value
+        written += await run(on_ticks)
+        spans.append((start, clock.value))
+        faults.clear_fault(target.id)
+        if cycle < cycles - 1:
+            written += await run(off_ticks)
+    return spans, written
+
+
 async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
     """Run every episode and write windows.jsonl + labels.jsonl. Returns the
     manifest body."""
@@ -298,6 +445,7 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
     history: dict[str, dict[str, list[float]]] = {}
     labels: list[dict[str, Any]] = []
     window_count = 0
+    label_id = 0
     first_tick = clock.value
 
     original_datetime = simulated_module.datetime
@@ -316,46 +464,71 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
                     args.window_samples,
                 )
 
-                fault_type = rng.choice(FAULT_TYPES)
+                shape = rng.choice(args.shapes)
                 target = rng.choice(resources)
-                fault_seconds = rng.randrange(
-                    args.fault_seconds_min,
-                    args.fault_seconds_max + 1,
-                    args.step_seconds,
+                run = _phase_runner(
+                    provider, resources, clock, history, windows_out, args
                 )
-                fault_ticks = max(1, fault_seconds // args.step_seconds)
 
-                provider.inject_fault(target.id, fault_type, _FAULT_TTL_SECONDS)
-                fault_start = clock.value
-                window_count += await _phase(
-                    fault_ticks,
-                    provider,
-                    resources,
-                    clock,
-                    history,
-                    windows_out,
-                    args.step_seconds,
-                    args.window_samples,
-                )
-                fault_end = clock.value
-                faults.clear_fault(target.id)
+                if shape == "intermittent":
+                    bursts, written = await _run_intermittent(
+                        provider, target, run, args
+                    )
+                    window_count += written
+                    spans = bursts
+                    fault_type = "cpu_hog"  # the primitive each burst injects
+                elif shape == "gradual_ramp":
+                    span, written = await _run_ramp(provider, target, run, args)
+                    window_count += written
+                    spans = [span]
+                    fault_type = "cpu_ramp"
+                elif shape == "small_step":
+                    span, written = await _run_constant(
+                        provider, target, "cpu_step_small", run, args.small_step_seconds, args
+                    )
+                    window_count += written
+                    spans = [span]
+                    fault_type = "cpu_step_small"
+                else:  # a classic single-shot fault, named directly by `shape`
+                    fault_type = shape
+                    seconds = rng.randrange(
+                        args.fault_seconds_min,
+                        args.fault_seconds_max + 1,
+                        args.step_seconds,
+                    )
+                    span, written = await _run_constant(
+                        provider, target, fault_type, run, seconds, args
+                    )
+                    window_count += written
+                    spans = [span]
 
-                labels.append(
-                    {
-                        "episode": episode,
-                        "fault_type": fault_type,
-                        "target": target.id,
-                        "tenant_id": target.tenant_id,
-                        "region": target.region,
-                        "affected": _affected_by(fault_type, target, resources),
-                        "start": fault_start.isoformat(),
-                        "end": fault_end.isoformat(),
-                        "duration_seconds": fault_ticks * args.step_seconds,
-                    }
-                )
+                affected = _affected_by(fault_type, target, resources)
+                for burst_index, (start, end) in enumerate(spans):
+                    labels.append(
+                        {
+                            # Unique across the whole dataset: the harness keys
+                            # detection delay on this, and `intermittent` emits
+                            # one row per ON burst (see _run_intermittent).
+                            "episode": label_id,
+                            "scheduled_episode": episode,
+                            "shape": shape,
+                            "burst": burst_index,
+                            "fault_type": fault_type,
+                            "target": target.id,
+                            "tenant_id": target.tenant_id,
+                            "region": target.region,
+                            "affected": affected,
+                            "start": start.isoformat(),
+                            "end": end.isoformat(),
+                            "duration_seconds": int((end - start).total_seconds()),
+                        }
+                    )
+                    label_id += 1
+
+                total_s = sum(int((e - s).total_seconds()) for s, e in spans)
                 print(
-                    f"episode {episode:>3}: {fault_type:<11} on {target.id:<12} "
-                    f"for {fault_ticks * args.step_seconds:>4}s"
+                    f"episode {episode:>3}: {shape:<13} on {target.id:<12} "
+                    f"{len(spans)} span(s), {total_s:>5}s faulty"
                 )
 
                 window_count += await _phase(
@@ -382,8 +555,23 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
         "seed": args.seed,
         "metric_list_version": _metric_list_version(),
         "created": datetime.now(UTC).date().isoformat(),
+        # `episode_count` is label rows, which is what the harness scores.
+        # `scheduled_episode_count` is generator loop iterations; they differ
+        # because an intermittent episode emits one row per ON burst.
         "episode_count": len(labels),
+        "scheduled_episode_count": args.episodes,
         "window_count": window_count,
+        "shapes_used": sorted(args.shapes),
+        "shape_distribution": dict(
+            sorted(Counter(str(row["shape"]) for row in labels).items())
+        ),
+        "shape_schedule": {
+            "ramp_minutes": args.ramp_minutes,
+            "small_step_seconds": args.small_step_seconds,
+            "intermittent_on_minutes": args.intermittent_on,
+            "intermittent_off_minutes": args.intermittent_off,
+            "intermittent_total_minutes": args.intermittent_minutes,
+        },
         "generator": "ml/datasets/make_episodes.py",
         "generator_commit": _generator_commit(),
         "fault_store": args.fault_store,
@@ -426,6 +614,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fault-seconds-min", type=int, default=60)
     parser.add_argument("--fault-seconds-max", type=int, default=180)
     parser.add_argument("--recover-minutes", type=float, default=2.0)
+    parser.add_argument(
+        "--shapes",
+        nargs="+",
+        default=list(ALL_SHAPES),
+        choices=list(ALL_SHAPES),
+        help="episode shapes to draw from (default: all)",
+    )
+    parser.add_argument("--ramp-minutes", type=float, default=10.0, help="gradual_ramp duration")
+    parser.add_argument(
+        "--small-step-seconds", type=int, default=300, help="small_step duration"
+    )
+    parser.add_argument("--intermittent-on", type=float, default=1.0, help="minutes on")
+    parser.add_argument("--intermittent-off", type=float, default=1.0, help="minutes off")
+    parser.add_argument(
+        "--intermittent-minutes", type=float, default=10.0, help="total intermittent span"
+    )
     parser.add_argument("--step-seconds", type=int, default=10, help="collector interval")
     parser.add_argument(
         "--window-samples", type=int, default=12, help="samples per MetricWindow (12 = 120s)"

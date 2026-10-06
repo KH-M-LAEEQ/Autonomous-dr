@@ -173,3 +173,47 @@ class ThresholdDetector(AnomalyDetector):
             "threshold": self.decision_threshold,
             **self._last_explain,
         }
+
+
+@register("threshold_unscaled")
+class UnscaledThresholdDetector(ThresholdDetector):
+    """The pre-fix rule, kept **only** so the regression stays measurable.
+
+    Identical to `ThresholdDetector` except that it takes the raw absolute
+    deviation from a per-signal *mean* with no scaling -- which is what made
+    the baseline silent (see this module's docstring and
+    `docs/results/practice-run.md`). Keeping it registered means the BEFORE row
+    of that comparison is regenerated from data by the same harness as the
+    AFTER row, rather than being a number quoted from a previous run on a
+    different dataset.
+
+    Not a candidate detector: it is deliberately absent from
+    `core.config.Settings.detector`'s allowed values, so nothing can select it
+    at runtime.
+    """
+
+    name = "threshold_unscaled"
+
+    def fit(self, X: list[MetricWindow]) -> None:
+        if not X:
+            raise ValueError("need at least 1 training window")
+
+        sums: dict[str, float] = {}
+        counts: dict[str, int] = {}
+        for window in X:
+            for signal in DETECTOR_SIGNALS:
+                for value in window.values.get(signal) or []:
+                    sums[signal] = sums.get(signal, 0.0) + value
+                    counts[signal] = counts.get(signal, 0) + 1
+        if not sums:
+            raise ValueError("training windows carry no detector signals")
+
+        # Mean, not median -- and a spread of exactly 1.0 everywhere, which is
+        # what "no scaling" means once `_residual` divides by it.
+        self._median = {s: sums[s] / counts[s] for s in sums}
+        self._spread = dict.fromkeys(sums, 1.0)
+
+        residuals = [self._residual(window) for window in X]
+        q1, q3 = _percentile(residuals, 25), _percentile(residuals, 75)
+        self.decision_threshold = q3 + IQR_MULTIPLIER * (q3 - q1)
+        self._consecutive_breaches = 0
