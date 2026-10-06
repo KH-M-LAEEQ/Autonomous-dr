@@ -111,6 +111,7 @@ export const QUORUM_TOTAL = 3;
  * as a stand-in. U = w_ability*Phi - w_cost*cost - w_latency*latency + w_safety*safety.
  */
 export type TermKey =
+  | "ability"
   | "cost"
   | "latency"
   | "safety"

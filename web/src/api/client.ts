@@ -34,40 +34,40 @@ async function getJson<T>(path: string): Promise<T> {
 
 export async function getOverview(): Promise<OverviewData> {
   if (USE_MOCK) return mockOverview;
-  return getJson<OverviewData>("/api/overview");
+  return getJson<OverviewData>("/api/v1/overview");
 }
 
 export async function getIncident(id: string): Promise<IncidentDetail | null> {
   if (USE_MOCK) return mockIncidentDetail[id] ?? null;
-  return getJson<IncidentDetail>(`/api/incidents/${id}`);
+  return getJson<IncidentDetail>(`/api/v1/incidents/${id}`);
 }
 
 export async function getTopology(): Promise<TopologyData> {
   if (USE_MOCK) return mockTopology;
-  return getJson<TopologyData>("/api/topology");
+  return getJson<TopologyData>("/api/v1/topology");
 }
 
 export async function getApproval(id: string): Promise<ApprovalRequest | null> {
   if (USE_MOCK) return mockApproval.id === id ? mockApproval : null;
-  return getJson<ApprovalRequest>(`/api/approvals/${id}`);
+  return getJson<ApprovalRequest>(`/api/v1/approvals/${id}`);
 }
 
 export async function getRegionalRisk(): Promise<RegionalRiskData> {
   if (USE_MOCK) return mockRegionalRisk;
-  return getJson<RegionalRiskData>("/api/risk/regions");
+  return getJson<RegionalRiskData>("/api/v1/risk/regions");
 }
 
 export async function getCost(): Promise<CostData> {
   if (USE_MOCK) return mockCost;
-  return getJson<CostData>("/api/cost");
+  return getJson<CostData>("/api/v1/cost");
 }
 
 export async function getSavings(): Promise<SavingsData> {
   if (USE_MOCK) return mockSavings;
-  return getJson<SavingsData>("/api/savings");
+  return getJson<SavingsData>("/api/v1/savings");
 }
 
 export async function getTenant(): Promise<TenantInfo> {
   if (USE_MOCK) return mockTenant;
-  return getJson<TenantInfo>("/api/tenant");
+  return getJson<TenantInfo>("/api/v1/tenant");
 }

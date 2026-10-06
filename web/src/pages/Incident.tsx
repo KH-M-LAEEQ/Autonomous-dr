@@ -23,6 +23,7 @@ const VOTE_TONE: Record<string, BadgeTone> = {
 };
 
 const TERM_LABELS: Record<TermKey, string> = {
+  ability: "Ability",
   cost: "Cost ($)",
   latency: "Latency (s)",
   safety: "Safety",
