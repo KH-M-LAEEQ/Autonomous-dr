@@ -7,10 +7,19 @@ Produces a versioned, immutable dataset under `ml/datasets/<version>/`:
     labels.schema.json   the label format, per ml/datasets/README.md
     manifest.json        seed, metric-list version, date, episode count
 
-The loop is: `--normal-minutes` of clean telemetry, one random fault injected
-through the real `core.faults` API, the fault's exact start/end/type/target
-appended to labels.jsonl, the fault cleared, `--recover-minutes` of settling,
-then the next episode.
+The loop is: `--normal-minutes` of clean telemetry, one fault injected through
+the real `core.faults` API, the fault's exact start/end/type/target appended
+to labels.jsonl, the fault cleared, `--recover-minutes` of settling, then the
+next episode. Which shape runs each episode is NOT drawn independently at
+random -- `_build_shape_schedule` round-robins through `--shapes`, reshuffled
+once per virtual day (`_episodes_per_virtual_day`), so every shape recurs
+steadily across the whole timeline rather than clustering wherever
+independent sampling happened to land (which it did for v4's `--seed 42`
+run: `stop` got 1 of its 7 episodes in the first third of the timeline and
+3 each in the other two; `small_step` got 3, then 1, then 6 of its 10 --
+exactly the kind of uneven spread that makes a 70/15/15 chronological split
+hand some shapes to test and starve others). `target` is still drawn
+independently per episode via `rng.choice`.
 
 Three things about how this runs that matter when you read the numbers:
 
@@ -317,6 +326,54 @@ Span = tuple[datetime, datetime]
 PhaseRunner = Any
 
 
+def _typical_fault_seconds(shape: str, args: argparse.Namespace) -> float:
+    """How long one episode of `shape` typically occupies the clock, used only
+    to size a "virtual day" for `_build_shape_schedule` -- not the actual
+    duration drawn at generation time (classic shapes still randomise within
+    `[fault_seconds_min, fault_seconds_max]`)."""
+    if shape == "intermittent":
+        return float(args.intermittent_minutes * 60)
+    if shape == "gradual_ramp":
+        return float(args.ramp_minutes * 60)
+    if shape == "small_step":
+        return float(args.small_step_seconds)
+    return float(args.fault_seconds_min + args.fault_seconds_max) / 2.0
+
+
+def _episodes_per_virtual_day(args: argparse.Namespace) -> int:
+    """How many episodes fit in 24h of virtual clock, given the configured
+    normal/recover phases and the average duration across the shapes in play.
+    Sizes the round-robin chunk in `_build_shape_schedule`."""
+    avg_fault_seconds = sum(_typical_fault_seconds(s, args) for s in args.shapes) / len(args.shapes)
+    episode_seconds: float = (
+        float(args.normal_minutes) * 60 + float(args.recover_minutes) * 60 + avg_fault_seconds
+    )
+    return max(1, round(86_400 / episode_seconds))
+
+
+def _build_shape_schedule(
+    rng: random.Random, shapes: list[str], n_episodes: int, episodes_per_day: int
+) -> list[str]:
+    """Round-robin through `shapes`, reshuffled once per virtual day, so every
+    shape recurs steadily across the whole timeline instead of clustering
+    wherever independent per-episode sampling happened to land -- the
+    confound `--seed 42 --episodes 300` previously could and did produce.
+
+    Each day's chunk is `shapes` repeated just enough to cover the chunk
+    length, then shuffled -- a round-robin rotation at the day granularity,
+    randomised in order within it. The final chunk is whatever is left over
+    (<= `episodes_per_day`), built the same way.
+    """
+    schedule: list[str] = []
+    chunk_size = max(1, episodes_per_day)
+    while len(schedule) < n_episodes:
+        size = min(chunk_size, n_episodes - len(schedule))
+        pool = (list(shapes) * (size // len(shapes) + 1))[:size]
+        rng.shuffle(pool)
+        schedule.extend(pool)
+    return schedule
+
+
 def _phase_runner(
     provider: SimulatedProvider,
     resources: list[Resource],
@@ -448,6 +505,9 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
     label_id = 0
     first_tick = clock.value
 
+    episodes_per_day = _episodes_per_virtual_day(args)
+    shape_schedule = _build_shape_schedule(rng, args.shapes, args.episodes, episodes_per_day)
+
     original_datetime = simulated_module.datetime
     simulated_module.datetime = _ClockDatetime(clock)  # type: ignore[assignment, misc]
     try:
@@ -464,7 +524,7 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
                     args.window_samples,
                 )
 
-                shape = rng.choice(args.shapes)
+                shape = shape_schedule[episode]
                 target = rng.choice(resources)
                 run = _phase_runner(
                     provider, resources, clock, history, windows_out, args
@@ -571,6 +631,8 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
             "intermittent_on_minutes": args.intermittent_on,
             "intermittent_off_minutes": args.intermittent_off,
             "intermittent_total_minutes": args.intermittent_minutes,
+            "policy": "round_robin_shuffled_per_virtual_day",
+            "episodes_per_virtual_day": episodes_per_day,
         },
         "generator": "ml/datasets/make_episodes.py",
         "generator_commit": _generator_commit(),
