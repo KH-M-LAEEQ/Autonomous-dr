@@ -64,7 +64,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-API_BASE = "http://localhost:8000"
+from core.config import get_settings  # noqa: E402
+
+API_PORT = get_settings().api_port
+API_BASE = f"http://localhost:{API_PORT}"
 TENANT_HAPPY_PATH = "tenant-a"
 TENANT_BUDGET_GATE = "tenant-b"
 RESOURCE_HAPPY_PATH = "sim-web-1"
@@ -249,13 +252,14 @@ _API_PROCESS: subprocess.Popen[bytes] | None = None
 
 
 def _ensure_api_running() -> str:
-    """Starts uvicorn natively if nothing already answers on :8000. Returns
-    'already-running' or 'started-by-smoke' for the report; the latter is
-    what `_stop_api_if_we_started_it` uses to decide whether to kill it."""
+    """Starts uvicorn natively if nothing already answers on API_PORT.
+    Returns 'already-running' or 'started-by-smoke' for the report; the
+    latter is what `_stop_api_if_we_started_it` uses to decide whether to
+    kill it."""
     global _API_PROCESS
-    if _port_open("localhost", 8000):
+    if _port_open("localhost", API_PORT):
         return "already-running"
-    _API_PROCESS = subprocess.Popen(
+    _API_PROCESS = subprocess.Popen(  # noqa: S603 -- fixed argv, no shell, nothing user-supplied
         [
             sys.executable,
             "-m",
@@ -264,14 +268,14 @@ def _ensure_api_running() -> str:
             "--host",
             "0.0.0.0",  # noqa: S104 -- local smoke run only, matches core/config.py's own default
             "--port",
-            "8000",
+            str(API_PORT),
         ],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     for _ in range(60):
-        if _port_open("localhost", 8000):
+        if _port_open("localhost", API_PORT):
             break
         time.sleep(0.5)
     return "started-by-smoke"
@@ -294,9 +298,9 @@ def check_api_health() -> CheckResult:
         look_at = "uvicorn logs / `make api`"
         if started_how == "already-running":
             look_at = (
-                "port 8000 was already answering before this script started anything, but not "
-                "with a 200 from /health -- something ELSE may be listening on 8000. "
-                f"`netstat -ano | findstr :8000`. Response seen: {body_h[:150]!r}"
+                f"port {API_PORT} was already answering before this script started anything, "
+                f"but not with a 200 from /health -- something ELSE may be listening on "
+                f"{API_PORT}. `netstat -ano | findstr :{API_PORT}`. Response seen: {body_h[:150]!r}"
             )
         return CheckResult(
             "3. API /health + /ready",

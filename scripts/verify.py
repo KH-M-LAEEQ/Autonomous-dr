@@ -122,7 +122,10 @@ def check_web_deps() -> Result:
 
 def check_api() -> Result:
     """Warn only: the API is a separate process you start yourself."""
-    ok = port_open("127.0.0.1", 8000)
+    from core.config import get_settings
+
+    port = get_settings().api_port
+    ok = port_open("127.0.0.1", port)
     return Result(ok, "responding" if ok else "not running", "make api", warn_only=True)
 
 

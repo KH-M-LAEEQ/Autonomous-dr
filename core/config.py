@@ -29,7 +29,11 @@ class Settings(BaseSettings):
 
     # API
     api_host: str = "0.0.0.0"  # noqa: S104 -- bound inside Docker only
-    api_port: int = 8000
+    # 8001, not 8000 -- 8000 collides with other projects' dev servers often
+    # enough (a real one squatted on it during Week 5's smoke-test work)
+    # that the default moved rather than asking everyone to remember to
+    # override it.
+    api_port: int = 8001
     cors_origins: str = "http://localhost:5173"
 
     # Pluggable implementations, selected at runtime

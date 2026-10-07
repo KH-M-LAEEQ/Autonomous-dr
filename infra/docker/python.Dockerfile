@@ -14,5 +14,8 @@ COPY api ./api
 COPY ml ./ml
 RUN pip install --no-cache-dir -e .
 
-EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8001
+# Shell form, not exec form, deliberately -- it is the only way CMD gets
+# environment-variable substitution, so API_PORT (core/config.py's
+# Settings.api_port) can override the default at `docker run -e` time.
+CMD uvicorn api.main:app --host 0.0.0.0 --port ${API_PORT:-8001}
