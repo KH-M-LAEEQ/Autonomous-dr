@@ -71,7 +71,7 @@ ignore_missing_imports = true
 files = ["core", "api"]
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests", "api/tests", "ml/tests"]
+testpaths = ["core/tests", "api/tests", "ml/tests", "scripts/tests"]
 asyncio_mode = "auto"
 addopts = "-q"
 

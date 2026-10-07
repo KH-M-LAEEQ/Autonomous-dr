@@ -323,17 +323,48 @@ def check_api_health() -> CheckResult:
 # -- 4. Collector ------------------------------------------------------------
 
 
+def applicability_problems(kind: str, values: dict[str, list[float]]) -> list[str]:
+    """Checks STRUCTURE, not values -- the applicability map
+    (`core.providers.simulated.applicable_signals`) says which signals a
+    resource kind reports; every one of those must be present (and
+    non-empty), and every signal it does NOT report must be absent. Never
+    looks at what a present signal's number actually is: a real measured
+    0.0 (error rate, throttle count, ...) on an applicable signal is not a
+    problem, and this function cannot even see it one way or the other --
+    only a non-applicable signal showing up AT ALL (0.0 included) is.
+
+    Returns one string per violation, signal name first so a caller can
+    prefix it with whatever resource this was.
+    """
+    from core.providers.simulated import applicable_signals
+    from core.signals import ALL_COLLECTED_SIGNALS
+
+    applicable = set(applicable_signals(kind))
+    not_applicable = set(ALL_COLLECTED_SIGNALS) - applicable
+
+    problems: list[str] = []
+    for signal in sorted(applicable):
+        if not values.get(signal):
+            problems.append(f"{signal}: applicable to {kind!r} but missing/null")
+    for signal in sorted(not_applicable):
+        if values.get(signal):
+            problems.append(
+                f"{signal}: NOT applicable to {kind!r} but present (value={values[signal]!r})"
+            )
+    return problems
+
+
 def check_collector(wait_seconds: int = 120) -> CheckResult:
     """Waits `wait_seconds` (default: the 2 minutes the task specifies),
-    then checks every tenant-a/tenant-b resource has at least one InfluxDB
-    point in the last `wait_seconds`, and that every present field is
-    non-null and -- for signals whose baseline in
-    core/providers/simulated.py is never exactly 0 -- not a bare 0.0, which
-    would indicate a null-as-zero regression rather than a real reading.
+    then checks every tenant-a/tenant-b resource's InfluxDB rows against
+    its applicability map via `applicability_problems` -- structure, not
+    values. See that function's docstring for exactly what "structure"
+    means here and why a real 0.0 is never flagged.
     """
+    import asyncio
+
     from core import influx
     from core.providers.simulated import TENANTS, SimulatedProvider
-    from core.signals import ALL_COLLECTED_SIGNALS
 
     print(f"    (waiting {wait_seconds}s for the collector...)", flush=True)
     time.sleep(wait_seconds)
@@ -341,28 +372,15 @@ def check_collector(wait_seconds: int = 120) -> CheckResult:
     provider = SimulatedProvider()
     problems: list[str] = []
     for tenant_id in TENANTS:
-        import asyncio
-
         resources = asyncio.run(provider.list_resources(tenant_id))
         for resource in resources:
             window = influx.query_recent_window(resource.id, tenant_id, wait_seconds)
             if not window.values:
                 problems.append(f"{resource.id}: no InfluxDB rows in the last {wait_seconds}s")
                 continue
-            for signal, series in window.values.items():
-                if signal not in ALL_COLLECTED_SIGNALS:
-                    continue
-                if any(v == 0.0 for v in series) and signal not in (
-                    "uptime_seconds",
-                    "net_packets_dropped",
-                    "error_rate_5xx",
-                    "error_rate_4xx",
-                    "throttle_count",
-                    "tcp_retransmit_rate",
-                    "gc_pause_ms",
-                    "swap_used_percent",
-                ):
-                    problems.append(f"{resource.id}.{signal}: exact 0.0 -- check null-vs-zero")
+            problems.extend(
+                f"{resource.id}: {p}" for p in applicability_problems(resource.kind, window.values)
+            )
 
     if problems:
         return CheckResult(
@@ -374,7 +392,7 @@ def check_collector(wait_seconds: int = 120) -> CheckResult:
     return CheckResult(
         "4. Collector writes InfluxDB",
         True,
-        f"every tenant-a/tenant-b resource has rows after {wait_seconds}s",
+        f"every tenant-a/tenant-b resource matches its applicability map after {wait_seconds}s",
     )
 
 
