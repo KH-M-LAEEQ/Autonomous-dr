@@ -23,7 +23,7 @@ _LAST_HASH = text("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1")
 _INSERT = text(
     """
     INSERT INTO audit_log (tenant_id, actor, action, payload, prev_hash, hash, created_at)
-    VALUES (:tenant_id, :actor, :action, :payload::jsonb, :prev_hash, :hash, :created_at)
+    VALUES (:tenant_id, :actor, :action, CAST(:payload AS jsonb), :prev_hash, :hash, :created_at)
     """
 )
 

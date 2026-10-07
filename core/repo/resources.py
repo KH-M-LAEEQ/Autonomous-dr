@@ -7,6 +7,7 @@ separate "register this resource" step anywhere else.
 """
 
 import json
+from typing import Any
 
 from sqlalchemy import text
 
@@ -19,7 +20,7 @@ log = get_logger(__name__)
 _UPSERT = text(
     """
     INSERT INTO resources (id, provider, region, tenant_id, kind, name, metadata, updated_at)
-    VALUES (:id, :provider, :region, :tenant_id, :kind, :name, :metadata::jsonb, now())
+    VALUES (:id, :provider, :region, :tenant_id, :kind, :name, CAST(:metadata AS jsonb), now())
     ON CONFLICT (id) DO UPDATE SET
         provider = EXCLUDED.provider,
         region = EXCLUDED.region,
@@ -53,3 +54,14 @@ def upsert_resource(resource: Resource) -> None:
         log.warning(
             "upsert_resource failed for %s; postgres unreachable", resource.id, exc_info=True
         )
+
+
+_GET = text("SELECT * FROM resources WHERE id = :resource_id")
+
+
+def get_resource_record(resource_id: str) -> dict[str, Any] | None:
+    """Raw row, region included -- the decision engine needs the region to
+    price a candidate action; nothing here needs the full `Resource` model."""
+    with session_scope() as session:
+        row = session.execute(_GET, {"resource_id": resource_id}).first()
+    return dict(row._mapping) if row is not None else None

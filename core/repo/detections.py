@@ -14,7 +14,7 @@ _INSERT = text(
          model_version, explanation)
     VALUES
         (:id, :resource_id, :tenant_id, :detector, :score, :is_anomaly, :detected_at,
-         :model_version, :explanation::jsonb)
+         :model_version, CAST(:explanation AS jsonb))
     """
 )
 
