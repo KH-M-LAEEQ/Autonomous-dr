@@ -184,6 +184,65 @@ def test_reset_clears_an_in_progress_breach_streak() -> None:
     assert detector.is_anomaly(_window(99.0)) is True  # 3rd -- now it trips
 
 
+# -- batch scoring -----------------------------------------------------------
+
+
+def test_score_batch_matches_calling_score_one_at_a_time() -> None:
+    """The whole point of `score_batch`: identical numbers, in the same
+    order, to scoring each window individually -- just one sklearn call
+    instead of many."""
+    rng = random.Random(3)
+    probe_windows = [_window(cpu, rng=rng) for cpu in (30.0, 97.0, 45.0, 30.0, 85.0)]
+
+    one_at_a_time = _fitted()
+    sequential_scores = [one_at_a_time.score(w) for w in probe_windows]
+
+    batched = _fitted()
+    batch_scores = batched.score_batch(probe_windows)
+
+    assert batch_scores == pytest.approx(sequential_scores)
+
+
+def test_score_batch_of_empty_list_is_empty() -> None:
+    assert _fitted().score_batch([]) == []
+
+
+def test_score_batch_requires_fit_first() -> None:
+    detector = build("iforest")
+    assert isinstance(detector, IsolationForestDetector)
+    with pytest.raises(RuntimeError, match="fit"):
+        detector.score_batch([_window(30.0)])
+
+
+def test_is_breach_replayed_over_batch_scores_matches_is_anomaly() -> None:
+    """`is_breach` is the hysteresis `is_anomaly` does internally, minus the
+    re-scoring -- replaying it over `score_batch`'s output must reach the
+    exact same True/False sequence as calling `is_anomaly` window by
+    window, breach-for-breach."""
+    rng = random.Random(11)
+    probe_windows = [
+        _window(cpu, rng=rng) for cpu in (30.0, 97.0, 98.0, 99.0, 30.0, 30.0, 96.0, 97.0, 98.0)
+    ]
+
+    sequential = _fitted()
+    sequential_results = [sequential.is_anomaly(w) for w in probe_windows]
+
+    batched = _fitted()
+    scores = batched.score_batch(probe_windows)
+    batched_results = [batched.is_breach(s) for s in scores]
+
+    assert batched_results == sequential_results
+    assert any(batched_results)  # the scripted CPU spikes must trip it at least once
+
+
+def test_explain_after_score_batch_describes_the_last_window() -> None:
+    detector = _fitted()
+    windows = [_window(30.0), _window(97.0)]
+    detector.score_batch(windows)
+    explanation = detector.explain()
+    assert explanation["score"] == pytest.approx(detector.score_batch([windows[-1]])[0])
+
+
 # -- time-of-day (optional, off by default) --------------------------------
 
 

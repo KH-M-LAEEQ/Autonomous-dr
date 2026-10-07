@@ -166,11 +166,7 @@ class IsolationForestDetector(AnomalyDetector):
         self._train_mean = {s: sums[s] / counts[s] for s in sums}
         self._train_std = {
             s: math.sqrt(
-                sum(
-                    (v - self._train_mean[s]) ** 2
-                    for w in X
-                    for v in w.values.get(s, [])
-                )
+                sum((v - self._train_mean[s]) ** 2 for w in X for v in w.values.get(s, []))
                 / counts[s]
             )
             for s in sums
@@ -185,14 +181,7 @@ class IsolationForestDetector(AnomalyDetector):
         self.decision_threshold = q3 + IQR_MULTIPLIER * (q3 - q1)
         self._consecutive_breaches = 0
 
-    def score(self, window: MetricWindow) -> float:
-        """Higher is more anomalous. sklearn's `score_samples` is the opposite
-        way round (higher = more normal), hence the negation."""
-        if not self._fitted:
-            raise RuntimeError("fit() must be called before score()")
-        vector = self._vector(window)
-        value = float(-self._forest.score_samples(np.asarray([vector], dtype=float))[0])
-
+    def _build_explain(self, window: MetricWindow, value: float) -> dict[str, Any]:
         deviations = {
             signal: abs(window.values[signal][-1] - self._train_mean.get(signal, 0.0))
             / (self._train_std.get(signal) or 1.0)
@@ -200,23 +189,66 @@ class IsolationForestDetector(AnomalyDetector):
             if window.values.get(signal)
         }
         top = sorted(deviations.items(), key=lambda kv: kv[1], reverse=True)[:3]
-        self._last_explain = {
+        return {
             "score": value,
             "threshold": self.decision_threshold,
             "top_deviating_signals": [
                 {"signal": s, "sigmas_from_training_mean": round(d, 3)} for s, d in top
             ],
         }
+
+    def score(self, window: MetricWindow) -> float:
+        """Higher is more anomalous. sklearn's `score_samples` is the opposite
+        way round (higher = more normal), hence the negation."""
+        if not self._fitted:
+            raise RuntimeError("fit() must be called before score()")
+        vector = self._vector(window)
+        value = float(-self._forest.score_samples(np.asarray([vector], dtype=float))[0])
+        self._last_explain = self._build_explain(window, value)
         return value
+
+    def score_batch(self, windows: list[MetricWindow]) -> list[float]:
+        """Vectorised `score()`: one `score_samples` call over all of
+        `windows` instead of one call per window. Same numbers, in the same
+        order, as calling `score()` on each window in turn -- just without
+        paying sklearn's per-call overhead `len(windows)` times.
+
+        Duck-typed, like `reset()`: not on the frozen `AnomalyDetector`
+        interface. `ml/harness/evaluate.py` uses this when present because
+        scoring one window at a time was the dominant cost of running this
+        detector over a large dataset (measured: `docs/results/
+        practice-run.md`'s batch-scoring timing note).
+
+        `explain()` after this describes the LAST window in the batch --
+        the same thing it would describe after calling `score()` on each
+        window in sequence and keeping only the final call's state.
+        """
+        if not self._fitted:
+            raise RuntimeError("fit() must be called before score_batch()")
+        if not windows:
+            return []
+        matrix = np.asarray([self._vector(w) for w in windows], dtype=float)
+        values = (-self._forest.score_samples(matrix)).tolist()
+        self._last_explain = self._build_explain(windows[-1], values[-1])
+        return [float(v) for v in values]
+
+    def is_breach(self, score: float) -> bool:
+        """Hysteresis only, given an already-computed score -- `score_batch`'s
+        companion. A caller scores many windows at once, then replays this
+        cheap, strictly sequential counter/reset logic over them one at a
+        time, in order; the result is identical to calling `is_anomaly` on
+        each window in turn, because that is exactly what `is_anomaly` does
+        internally, just without the re-scoring."""
+        breach = score > self.decision_threshold
+        self._consecutive_breaches = self._consecutive_breaches + 1 if breach else 0
+        return self._consecutive_breaches >= self._required
 
     def is_anomaly(self, window: MetricWindow) -> bool:
         """Overrides the default for hysteresis, and because the pre-freeze
         `AnomalyDetector.is_anomaly` on this branch still routes through a
         `ThresholdStrategy` this detector does not use. Explicit here, so it
         behaves identically under the old and the post-freeze contract."""
-        breach = self.score(window) > self.decision_threshold
-        self._consecutive_breaches = self._consecutive_breaches + 1 if breach else 0
-        return self._consecutive_breaches >= self._required
+        return self.is_breach(self.score(window))
 
     def explain(self) -> dict[str, Any]:
         """Describes the last `score` call. Never raises.

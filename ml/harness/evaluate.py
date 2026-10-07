@@ -231,9 +231,7 @@ def load_windows_for_resource(
         # Either the resource genuinely has no windows, or the substring fast
         # path missed because the file is formatted differently. Re-scan the
         # slow, always-correct way before believing the empty answer.
-        windows = sorted(
-            _iter_windows(path, resource_id, use_prefilter=False), key=lambda w: w.end
-        )
+        windows = sorted(_iter_windows(path, resource_id, use_prefilter=False), key=lambda w: w.end)
     return windows
 
 
@@ -331,7 +329,20 @@ def _score_resource(
     # a window's rolling history after the fault itself has cleared.
     grace = windows[0].end - windows[0].start if windows else timedelta(0)
 
-    for window in windows[test_slice]:
+    test_windows = windows[test_slice]
+    # Duck-typed batch scoring (like `reset()`): if the detector offers it,
+    # score the whole test slice in one vectorised call instead of one call
+    # per window -- see `IsolationForestDetector.score_batch`'s docstring
+    # for why that is the dominant cost on a large dataset. `is_breach`
+    # replays the exact same consecutive-breach/reset hysteresis `is_anomaly`
+    # would have, just against an already-computed score.
+    score_batch = getattr(detector, "score_batch", None)
+    is_breach = getattr(detector, "is_breach", None)
+    batch_scores: list[float] | None = None
+    if callable(score_batch) and callable(is_breach):
+        batch_scores = score_batch(test_windows)
+
+    for index, window in enumerate(test_windows):
         tally.test_windows += 1
         fault = _fault_at(window, intervals)
 
@@ -341,7 +352,10 @@ def _score_resource(
                 reset()
             active_episode = fault.episode
 
-        predicted = detector.is_anomaly(window)
+        if batch_scores is not None and callable(is_breach):
+            predicted = is_breach(batch_scores[index])
+        else:
+            predicted = detector.is_anomaly(window)
 
         if fault is not None:
             episodes_seen.add(fault.episode)
@@ -379,9 +393,7 @@ def _score_resource(
         delay = (alarm_at - interval.start).total_seconds()
         tally.delays_s.append(delay)
         tally.delays_by_shape.setdefault(interval.shape, []).append(delay)
-        tally.detected_by_shape[interval.shape] = (
-            tally.detected_by_shape.get(interval.shape, 0) + 1
-        )
+        tally.detected_by_shape[interval.shape] = tally.detected_by_shape.get(interval.shape, 0) + 1
 
 
 def evaluate(
@@ -446,9 +458,7 @@ def evaluate(
             shape: {
                 "episodes": float(count),
                 "detected": float(tally.detected_by_shape.get(shape, 0)),
-                "detection_rate": (
-                    tally.detected_by_shape.get(shape, 0) / count if count else 0.0
-                ),
+                "detection_rate": (tally.detected_by_shape.get(shape, 0) / count if count else 0.0),
                 "delay_p50_s": _percentile(tally.delays_by_shape.get(shape, []), 50),
                 "delay_p95_s": _percentile(tally.delays_by_shape.get(shape, []), 95),
                 "delay_p99_s": _percentile(tally.delays_by_shape.get(shape, []), 99),
@@ -588,7 +598,7 @@ def render_markdown(results: list[EvalResult], manifest: dict[str, Any]) -> str:
         "adaptation — `_residual` was unchanged and the old `IQRThreshold` strategy",
         "computed the identical fence. The fix divides each signal by its own",
         "training interquartile range first, so every signal contributes on a",
-        "comparable \"how unusual is this for *this* signal\" scale and a max() across",
+        'comparable "how unusual is this for *this* signal" scale and a max() across',
         "them is meaningful. Median and IQR rather than mean and standard deviation,",
         "because both are robust to a contaminated training window. A zero-spread",
         "signal (`health_check_pass` is 1.0 in every normal window) falls back to its",
