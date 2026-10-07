@@ -20,3 +20,17 @@ def list_active_tenant_ids() -> list[str]:
     except Exception:
         log.warning("list_active_tenant_ids failed; postgres unreachable", exc_info=True)
         return []
+
+
+_GET_BUDGET = text("SELECT monthly_budget_usd FROM tenants WHERE id = :tenant_id")
+
+
+def get_monthly_budget_usd(tenant_id: str) -> float:
+    """The budget gate's cap (Week 5). Raises if the tenant row is missing --
+    unlike `list_active_tenant_ids`, a missing cap is a data problem the
+    caller must not silently treat as "unlimited"."""
+    with get_engine().connect() as conn:
+        row = conn.execute(_GET_BUDGET, {"tenant_id": tenant_id}).first()
+    if row is None:
+        raise ValueError(f"no tenant row for {tenant_id!r}")
+    return float(row[0])
