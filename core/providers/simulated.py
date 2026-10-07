@@ -212,6 +212,19 @@ def _clamp(value: float, ceiling: float, floor: float = 0.0) -> float:
     return max(floor, min(value, ceiling))
 
 
+def get_resource(resource_id: str) -> Resource | None:
+    """Public lookup for callers outside this module (e.g.
+    `core.providers.simulated_executor`) that need to validate a resource id
+    without reaching into the private `_RESOURCE_BY_ID` table directly."""
+    return _RESOURCE_BY_ID.get(resource_id)
+
+
+def applicable_signals(kind: str) -> tuple[str, ...]:
+    """Signals this resource kind reports. Everything else is null for it."""
+    na = _NOT_APPLICABLE_BY_KIND.get(kind, frozenset())
+    return tuple(s for s in ALL_COLLECTED_SIGNALS if s not in na)
+
+
 def _lognormal_params(mean: float, std: float) -> tuple[float, float]:
     """`(mu, sigma)` for `random.lognormvariate` such that the draw's own
     mean and std -- on the real, non-log scale -- equal `mean`/`std`
