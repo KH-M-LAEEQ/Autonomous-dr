@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -254,6 +255,40 @@ def test_evaluate_trains_only_on_normal_windows(tmp_path: Path) -> None:
     windows = load_windows_for_resource("vtest", "r1", tmp_path)
     train_slice, _, _ = time_based_split(len(windows))
     assert result.extra["train_windows"] == len(windows[train_slice])
+
+
+def test_batch_scoring_produces_identical_results_to_per_window_scoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_score_resource` uses `IsolationForestDetector.score_batch` +
+    `is_breach` when present. Hiding just `score_batch` from `getattr`
+    forces the harness back onto the old one-call-per-window `is_anomaly`
+    path (which still uses `is_breach` internally -- that part is not
+    under test here) on the exact same data, same fit, same random_state.
+    The two full `EvalResult`s -- window counts, delays, per-shape
+    breakdown, everything -- must come out byte-for-byte equal.
+    """
+    pytest.importorskip("sklearn", reason="requires the ml extra")
+    from ml.detectors.iforest import IsolationForestDetector
+
+    _write_dataset(tmp_path, ["r1", "r2"], n_normal=80)
+
+    batched = evaluate("iforest", "vtest", tmp_path)
+
+    monkeypatch.delattr(IsolationForestDetector, "score_batch")
+    sequential = evaluate("iforest", "vtest", tmp_path)
+
+    # Plain `==` would spuriously fail here: both sides report `nan` for a
+    # percentile with no delay samples, and nan != nan. "No detections in
+    # either run" IS the identical result, so nan is compared nan-aware.
+    def equal(a: object, b: object) -> bool:
+        if isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b):
+            return True
+        if isinstance(a, dict) and isinstance(b, dict):
+            return a.keys() == b.keys() and all(equal(a[k], b[k]) for k in a)
+        return a == b
+
+    assert equal(asdict(batched), asdict(sequential))
 
 
 # -- zero-second detection delays: episode reset + grace period ------------
