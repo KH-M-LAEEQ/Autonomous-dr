@@ -76,5 +76,8 @@ web-build: ## Type-check and build the frontend (same as CI)
 results: ## Regenerate every table and figure in the thesis (Week 31 target)
 	@echo "Not implemented until Week 10 -- ml/harness/evaluate.py owns this."
 
+smoke: ## Walk the product end to end; PASS/FAIL per check, stops at the first failure
+	python3 scripts/smoke.py
+
 .PHONY: help setup verify hooks openapi up up-all down nuke api worker beat web migrate \
-	migration test lint fmt web-build results
+	migration test lint fmt web-build results smoke
