@@ -95,6 +95,12 @@ _RESOURCES: tuple[Resource, ...] = (
 
 _RESOURCE_BY_ID: dict[str, Resource] = {r.id: r for r in _RESOURCES}
 
+#: Bumped whenever a change here affects what a generated dataset looks like
+#: (ADR convention: a dataset's manifest records which version produced it).
+#: v1-v5 predate this constant and are not touched or relabelled -- only
+#: datasets generated from here on carry it. 2: the clamp-at-zero fix below.
+SIMULATOR_VERSION = 2
+
 # (mean, std, ceiling) per signal. `math.inf` ceiling means "no natural cap"
 # (byte/count rates); percentages cap at 100.
 Baseline = tuple[float, float, float]
@@ -165,8 +171,27 @@ _SEASONAL_SIGNALS: frozenset[str] = frozenset(
 )
 
 
-def _clamp(value: float, ceiling: float) -> float:
-    return max(0.0, min(value, ceiling))
+#: Signals audited for the clamp-at-zero pattern (every entry in
+#: `_DEFAULT_BASELINE` was checked): these three are the only ones where
+#: 0.0 is never a real reading, just where the floor used to land. A
+#: completed operation cannot take zero time -- unlike, say,
+#: `error_rate_5xx` or `throttle_count` (genuinely 0 whenever nothing went
+#: wrong) or `replication_lag_seconds` (genuinely 0 when fully caught up).
+#: Counts like `process_count`/`open_file_descriptors` have the same
+#: theoretical floor-at-zero shape but sit 8-10 standard deviations from
+#: it, so they never actually clamp -- left alone rather than changed with
+#: no observable effect. Floored at 0.1 (the signal's own unit -- ms, per
+#: docs/metric-schema.md) instead of 0.0; the mean is unchanged, only the
+#: rare low tail moves.
+_POSITIVE_FLOOR: dict[str, float] = {
+    "latency_p50": 0.1,
+    "latency_p95": 0.1,
+    "latency_p99": 0.1,
+}
+
+
+def _clamp(value: float, ceiling: float, floor: float = 0.0) -> float:
+    return max(floor, min(value, ceiling))
 
 
 def _seasonal_factor(now: datetime) -> float:
@@ -187,7 +212,7 @@ def _generate_signals(resource: Resource, now: datetime) -> dict[str, float]:
         mean, std, ceiling = baseline[signal]
         scaled_mean = mean * factor if signal in _SEASONAL_SIGNALS else mean
         value = random.gauss(scaled_mean, std) if std > 0 else scaled_mean
-        signals[signal] = _clamp(value, ceiling)
+        signals[signal] = _clamp(value, ceiling, _POSITIVE_FLOOR.get(signal, 0.0))
     return signals
 
 
