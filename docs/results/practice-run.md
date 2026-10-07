@@ -9,12 +9,12 @@ Nothing here belongs in the thesis.
 
 ## Dataset
 
-- Version: `v4`, seed `42`
-- Episodes: 150, windows: 177184
+- Version: `v5`, seed `42`
+- Episodes: 432, windows: 590712
 - Metric list: 25 signals, sha `7fad93b7e4f8cbd3`
-- Shape mix: cpu_hog x6, gradual_ramp x8, intermittent x75, latency x15, pause x18, region_down x11, small_step x10, stop x7
+- Shape mix: cpu_hog x50, gradual_ramp x33, intermittent x165, latency x50, pause x34, region_down x33, small_step x33, stop x34
 - Collector step: 20s, window 12 samples (240s)
-- Generated: 2026-10-06 by `ml/datasets/make_episodes.py` at commit `055935b6241b`
+- Generated: 2026-10-07 by `ml/datasets/make_episodes.py` at commit `b655650704fa`
 - Fault store: `memory`
 
 Split is ADR-0008 70/15/15, chronological, never shuffled, applied
@@ -30,8 +30,8 @@ per-signal scaling rather than quoting an old number from a different run.
 | Detector | Precision | Recall | F1 | FPR | Delay p50 | Delay p95 | Delay p99 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `threshold_unscaled` | 0.000 | 0.000 | 0.000 | 0.000 | n/a | n/a | n/a |
-| `threshold` | 0.992 | 0.492 | 0.658 | 0.000 | 40s | 40s | 40s |
-| `iforest` | 0.473 | 0.480 | 0.477 | 0.005 | 40s | 40s | 72s |
+| `threshold` | 1.000 | 0.719 | 0.836 | 0.000 | 40s | 100s | 145s |
+| `iforest` | 0.554 | 0.688 | 0.613 | 0.006 | 40s | 144s | 288s |
 
 Window-level precision/recall/F1/FPR. Delay is per fault episode, measured
 from the fault's exact start to the first alarm, in seconds.
@@ -40,9 +40,9 @@ from the fault's exact start to the first alarm, in seconds.
 
 | Detector | TP | FP | TN | FN | Train win. | Test win. | Episodes in test | Episodes detected | Delay samples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `threshold_unscaled` | 0 | 0 | 26328 | 256 | 122433 | 26584 | 27 | 0 | 0 |
-| `threshold` | 126 | 1 | 26327 | 130 | 122433 | 26584 | 27 | 22 | 22 |
-| `iforest` | 123 | 137 | 26191 | 133 | 122433 | 26584 | 27 | 21 | 21 |
+| `threshold_unscaled` | 0 | 0 | 87617 | 999 | 408296 | 88616 | 75 | 0 | 0 |
+| `threshold` | 718 | 0 | 87617 | 281 | 408296 | 88616 | 75 | 60 | 60 |
+| `iforest` | 687 | 554 | 87063 | 312 | 408296 | 88616 | 75 | 55 | 55 |
 
 ## Per fault shape
 
@@ -52,27 +52,30 @@ test slice; delays are seconds from the fault's exact start.
 
 | Shape | Detector | Episodes | Detected | Rate | p50 | p95 | p99 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `cpu_hog` | `threshold_unscaled` | 1 | 0 | 0.000 | n/a | n/a | n/a |
-| `cpu_hog` | `threshold` | 1 | 1 | 1.000 | 40s | 40s | 40s |
-| `cpu_hog` | `iforest` | 1 | 1 | 1.000 | 80s | 80s | 80s |
-| `intermittent` | `threshold_unscaled` | 15 | 0 | 0.000 | n/a | n/a | n/a |
-| `intermittent` | `threshold` | 15 | 15 | 1.000 | 40s | 40s | 40s |
-| `intermittent` | `iforest` | 15 | 14 | 0.933 | 40s | 40s | 40s |
-| `latency` | `threshold_unscaled` | 2 | 0 | 0.000 | n/a | n/a | n/a |
-| `latency` | `threshold` | 2 | 1 | 0.500 | 40s | 40s | 40s |
-| `latency` | `iforest` | 2 | 1 | 0.500 | 40s | 40s | 40s |
-| `pause` | `threshold_unscaled` | 1 | 0 | 0.000 | n/a | n/a | n/a |
-| `pause` | `threshold` | 1 | 1 | 1.000 | 40s | 40s | 40s |
-| `pause` | `iforest` | 1 | 1 | 1.000 | 40s | 40s | 40s |
-| `region_down` | `threshold_unscaled` | 2 | 0 | 0.000 | n/a | n/a | n/a |
-| `region_down` | `threshold` | 2 | 2 | 1.000 | 40s | 40s | 40s |
-| `region_down` | `iforest` | 2 | 2 | 1.000 | 40s | 40s | 40s |
-| `small_step` | `threshold_unscaled` | 4 | 0 | 0.000 | n/a | n/a | n/a |
-| `small_step` | `threshold` | 4 | 0 | 0.000 | n/a | n/a | n/a |
-| `small_step` | `iforest` | 4 | 0 | 0.000 | n/a | n/a | n/a |
-| `stop` | `threshold_unscaled` | 2 | 0 | 0.000 | n/a | n/a | n/a |
-| `stop` | `threshold` | 2 | 2 | 1.000 | 40s | 40s | 40s |
-| `stop` | `iforest` | 2 | 2 | 1.000 | 40s | 40s | 40s |
+| `cpu_hog` | `threshold_unscaled` | 8 | 0 | 0.000 | n/a | n/a | n/a |
+| `cpu_hog` | `threshold` | 8 | 8 | 1.000 | 40s | 40s | 40s |
+| `cpu_hog` | `iforest` | 8 | 8 | 1.000 | 40s | 66s | 77s |
+| `gradual_ramp` | `threshold_unscaled` | 5 | 0 | 0.000 | n/a | n/a | n/a |
+| `gradual_ramp` | `threshold` | 5 | 4 | 0.800 | 110s | 171s | 178s |
+| `gradual_ramp` | `iforest` | 5 | 4 | 0.800 | 230s | 311s | 318s |
+| `intermittent` | `threshold_unscaled` | 25 | 0 | 0.000 | n/a | n/a | n/a |
+| `intermittent` | `threshold` | 25 | 17 | 0.680 | 40s | 40s | 40s |
+| `intermittent` | `iforest` | 25 | 12 | 0.480 | 40s | 40s | 40s |
+| `latency` | `threshold_unscaled` | 7 | 0 | 0.000 | n/a | n/a | n/a |
+| `latency` | `threshold` | 7 | 6 | 0.857 | 40s | 40s | 40s |
+| `latency` | `iforest` | 7 | 6 | 0.857 | 40s | 55s | 59s |
+| `pause` | `threshold_unscaled` | 6 | 0 | 0.000 | n/a | n/a | n/a |
+| `pause` | `threshold` | 6 | 6 | 1.000 | 40s | 40s | 40s |
+| `pause` | `iforest` | 6 | 6 | 1.000 | 40s | 40s | 40s |
+| `region_down` | `threshold_unscaled` | 14 | 0 | 0.000 | n/a | n/a | n/a |
+| `region_down` | `threshold` | 14 | 14 | 1.000 | 40s | 40s | 40s |
+| `region_down` | `iforest` | 14 | 14 | 1.000 | 40s | 40s | 40s |
+| `small_step` | `threshold_unscaled` | 5 | 0 | 0.000 | n/a | n/a | n/a |
+| `small_step` | `threshold` | 5 | 0 | 0.000 | n/a | n/a | n/a |
+| `small_step` | `iforest` | 5 | 0 | 0.000 | n/a | n/a | n/a |
+| `stop` | `threshold_unscaled` | 5 | 0 | 0.000 | n/a | n/a | n/a |
+| `stop` | `threshold` | 5 | 5 | 1.000 | 40s | 40s | 40s |
+| `stop` | `iforest` | 5 | 5 | 1.000 | 40s | 40s | 40s |
 
 ## What this run actually found
 
@@ -168,6 +171,6 @@ episode is scored on its own.
 Regenerate with:
 
 ```
-python -m ml.datasets.make_episodes --seed 42 --episodes 150 --version v4 --fault-store memory
-python -m ml.harness.evaluate --dataset-version v4
+python -m ml.datasets.make_episodes --seed 42 --episodes 432 --version v5 --fault-store memory
+python -m ml.harness.evaluate --dataset-version v5
 ```
