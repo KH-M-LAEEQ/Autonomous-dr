@@ -9,11 +9,14 @@ from pathlib import Path
 
 import pytest
 
+import ml.harness.evaluate as evaluate_module
+from core.interfaces.anomaly_detector import AnomalyDetector
 from core.models.domain import MetricWindow
 from ml.harness.evaluate import (
     EvalResult,
     FaultInterval,
     _fault_at,
+    _grace_fault_at,
     _percentile,
     evaluate,
     load_fault_intervals,
@@ -251,3 +254,167 @@ def test_evaluate_trains_only_on_normal_windows(tmp_path: Path) -> None:
     windows = load_windows_for_resource("vtest", "r1", tmp_path)
     train_slice, _, _ = time_based_split(len(windows))
     assert result.extra["train_windows"] == len(windows[train_slice])
+
+
+# -- zero-second detection delays: episode reset + grace period ------------
+#
+# Isolation Forest reported a 0s detection delay on `intermittent`'s back-to-
+# back bursts. Root cause: the detector's consecutive-breach counter is
+# per-instance, scored across the whole test slice for one resource, and was
+# never reset between episodes. A breach streak that built up near the tail
+# of one burst (where the rolling-window features still carry some
+# fault-contaminated samples) only needed one more breach on the very first
+# window of the *next* burst to "detect" it instantly. These tests pin the
+# fix: `_score_resource` resets the detector at each new episode's strict
+# start, and `_grace_fault_at` gives a lingering breach the chance to be
+# credited to the episode it actually describes instead of the next one.
+
+
+class _ScriptedDetector(AnomalyDetector):
+    """Hand-scripted hysteresis for regression-testing the harness's episode
+    bookkeeping -- not a real scorer. `breaches` is the exact True/False
+    sequence to feed `is_anomaly`, one entry per call, in call order; it must
+    have exactly as many entries as there are test-slice windows."""
+
+    name = "scripted"
+    requires_training = True
+
+    def __init__(self, breaches: list[bool]) -> None:
+        self._breaches = breaches
+        self._call = 0
+        self._consecutive_breaches = 0
+
+    def fit(self, X: list[MetricWindow], X_val: list[MetricWindow] | None = None) -> None:
+        pass
+
+    def score(self, window: MetricWindow) -> float:
+        return 1.0 if self._breaches[self._call] else 0.0
+
+    def explain(self) -> dict[str, object]:
+        return {}
+
+    def is_anomaly(self, window: MetricWindow) -> bool:
+        breach = self._breaches[self._call]
+        self._call += 1
+        self._consecutive_breaches = self._consecutive_breaches + 1 if breach else 0
+        return self._consecutive_breaches >= 3
+
+    def reset(self) -> None:
+        self._consecutive_breaches = 0
+
+
+def _write_scripted_dataset(
+    root: Path, version: str, intervals: list[tuple[int, int, int]], n_total: int = 100
+) -> None:
+    """One resource, `n_total` windows, step 10s, 12 samples -- and a fault
+    interval per `(episode, start_tick, end_tick)` in `intervals`. Values are
+    constant; `_ScriptedDetector` ignores them entirely."""
+    out = root / version
+    out.mkdir(parents=True)
+    step, samples = 10, 12
+
+    rows = [
+        {
+            "resource_id": "r1",
+            "tenant_id": "t1",
+            "region": "sim-us-east-1",
+            "kind": "web_service",
+            "start": (
+                _T0 + timedelta(seconds=step * tick) - timedelta(seconds=step * (samples - 1))
+            ).isoformat(),
+            "end": (_T0 + timedelta(seconds=step * tick)).isoformat(),
+            "step_seconds": step,
+            "values": {"cpu_percent": [30.0] * samples},
+        }
+        for tick in range(n_total)
+    ]
+    (out / "windows.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
+    )
+
+    labels = [
+        {
+            "episode": episode,
+            "shape": "test_shape",
+            "fault_type": "cpu_hog",
+            "target": "r1",
+            "tenant_id": "t1",
+            "region": "sim-us-east-1",
+            "affected": ["r1"],
+            "start": (_T0 + timedelta(seconds=step * start_tick)).isoformat(),
+            "end": (_T0 + timedelta(seconds=step * end_tick)).isoformat(),
+            "duration_seconds": step * (end_tick - start_tick),
+        }
+        for episode, start_tick, end_tick in intervals
+    ]
+    (out / "labels.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in labels), encoding="utf-8"
+    )
+    (out / "manifest.json").write_text(
+        json.dumps({"version": version, "seed": 7, "resources": ["r1"]}), encoding="utf-8"
+    )
+
+
+def _evaluate_scripted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str, breaches: list[bool]
+) -> EvalResult:
+    monkeypatch.setattr(
+        evaluate_module, "build", lambda name, **kwargs: _ScriptedDetector(**kwargs)
+    )
+    return evaluate_module.evaluate("scripted", version, tmp_path, breaches=breaches)
+
+
+def test_grace_fault_at_only_covers_the_tail_after_an_interval_ends() -> None:
+    grace = timedelta(seconds=50)
+    assert _grace_fault_at(_window(_T0 + timedelta(seconds=199)), _INTERVAL, grace) is None
+    assert _grace_fault_at(_window(_T0 + timedelta(seconds=200)), _INTERVAL, grace) is not None
+    assert _grace_fault_at(_window(_T0 + timedelta(seconds=249)), _INTERVAL, grace) is not None
+    assert _grace_fault_at(_window(_T0 + timedelta(seconds=250)), _INTERVAL, grace) is None
+
+
+def test_grace_fault_at_is_disabled_by_a_non_positive_grace() -> None:
+    assert _grace_fault_at(_window(_T0 + timedelta(seconds=210)), _INTERVAL, timedelta(0)) is None
+
+
+def test_episode_reset_prevents_a_carried_over_breach_from_zeroing_the_next_delay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test slice is ticks 85-99 (15 windows, local 0-14). Episode A: ticks
+    91-93 (3 clean consecutive breaches -> detected at tick 93, delay 20s).
+    Then breaches keep firing through ticks 94-96 -- A's grace tail, still
+    unresolved when episode B's window actually arrives. Episode B starts at
+    tick 97: WITHOUT a reset there, the carried-over count of >=3 would fire
+    on B's very first window, delay 0s. WITH the reset, B needs its own 3
+    consecutive breaches (ticks 97-99), delay 20s -- never 0."""
+    breaches = [False] * 6 + [True] * 3 + [True] * 3 + [True] * 3
+    assert len(breaches) == 15  # one entry per test-slice window (ticks 85-99)
+
+    _write_scripted_dataset(tmp_path, "vreset", intervals=[(0, 91, 94), (1, 97, 999)], n_total=100)
+    result = _evaluate_scripted(monkeypatch, tmp_path, "vreset", breaches)
+
+    assert result.extra["episodes_detected"] == 2
+    # Both episodes must be caught at the same, non-zero, 2-step floor. With
+    # only 2 delay samples, p50 and p95 both landing on 20.0 is only possible
+    # if BOTH are 20.0 -- one of them being 0.0 would pull the percentiles
+    # off of 20 (e.g. [0, 20] interpolates to p50=10, p95=19).
+    assert result.detection_delay_p50_s == pytest.approx(20.0)
+    assert result.detection_delay_p95_s == pytest.approx(20.0)
+
+
+def test_breach_before_fault_start_is_a_false_alarm_not_a_catch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """3 consecutive breaches entirely before the fault starts (ticks 85-87)
+    cross the hysteresis gate once, on the 3rd of the three -- that single
+    window must score as a false positive and must NOT shorten the real
+    episode's delay when the fault later begins cleanly at tick 95."""
+    breaches = [True, True, True] + [False] * 7 + [True, True, True] + [False, False]
+    assert len(breaches) == 15
+
+    _write_scripted_dataset(tmp_path, "vearly", intervals=[(0, 95, 98)], n_total=100)
+    result = _evaluate_scripted(monkeypatch, tmp_path, "vearly", breaches)
+
+    assert result.extra["false_positives"] == 1
+    assert result.extra["episodes_detected"] == 1
+    assert result.extra["delay_samples"] == 1
+    assert result.detection_delay_p50_s == pytest.approx(20.0)

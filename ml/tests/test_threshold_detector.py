@@ -198,6 +198,21 @@ def test_consecutive_breaches_required_is_three() -> None:
     assert CONSECUTIVE_BREACHES_REQUIRED == 3
 
 
+def test_reset_clears_an_in_progress_breach_streak() -> None:
+    """`reset()` is a duck-typed extension the Week 10 harness calls between
+    fault episodes (see ml/harness/evaluate.py and
+    docs/results/practice-run.md, "zero-second detection delays") -- not part
+    of the frozen `AnomalyDetector` interface. A streak that would trip on
+    its next breach must need all 3 again after a reset."""
+    detector = _fitted()
+    assert detector.is_anomaly(_window(cpu=97.0)) is False  # 1st breach
+    assert detector.is_anomaly(_window(cpu=98.0)) is False  # 2nd breach
+    detector.reset()
+    assert detector.is_anomaly(_window(cpu=99.0)) is False  # back to 1st, not 3rd
+    assert detector.is_anomaly(_window(cpu=99.0)) is False  # 2nd
+    assert detector.is_anomaly(_window(cpu=99.0)) is True  # 3rd -- now it trips
+
+
 # -- signal selection ------------------------------------------------------
 
 
@@ -247,6 +262,11 @@ def test_unscaled_variant_cannot_be_selected_by_config() -> None:
     allowed = typing.get_args(Settings.model_fields["detector"].annotation)
     assert "threshold_unscaled" not in allowed
     assert "threshold" in allowed
+
+
+#: Fuller coverage (node_detector, and a behavioural check that pydantic
+#: actually rejects the value rather than just inspecting the type hint)
+#: lives in core/tests/test_config.py, alongside the rest of Settings.
 
 
 def test_unscaled_variant_reproduces_the_scale_domination_bug() -> None:

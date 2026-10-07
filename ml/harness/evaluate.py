@@ -42,6 +42,18 @@ stopping monitors (the W11 LSTM, patience 5), and "a 70/30 split has nowhere to
 stop from". Code, docstring and ADR now agree. The val slice has no consumer
 yet because the post-freeze `AnomalyDetector.fit` takes no `X_val`; it is
 reserved, not spare, and must not be folded into train or test.
+
+**Episode boundaries reset detector hysteresis, and a fault's grace tail is
+attributed to it, not stolen by whatever comes next.** `_score_resource` calls
+`detector.reset()` (duck-typed, not part of the frozen `AnomalyDetector`
+interface) at the first window strictly inside a new episode, and
+`_grace_fault_at` lets a lingering breach just after a fault's labelled end
+still count toward that fault rather than toward the next one. Both exist
+because the Isolation Forest row of `docs/results/practice-run.md` reported a
+0s detection delay on `intermittent`'s back-to-back bursts: a breach streak
+from one burst's rolling-window tail only needed one more breach on the next
+burst's very first window to "detect" it instantly. See that doc's
+"zero-second detection delays" section for the full before/after.
 """
 
 from __future__ import annotations
@@ -51,7 +63,7 @@ import json
 import math
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -236,6 +248,32 @@ def _fault_at(window: MetricWindow, intervals: list[FaultInterval]) -> FaultInte
     return None
 
 
+def _grace_fault_at(
+    window: MetricWindow, intervals: list[FaultInterval], grace: timedelta
+) -> FaultInterval | None:
+    """The most recently *ended* fault whose grace period still covers this
+    window, if any. Only ever consulted once `_fault_at` has already returned
+    `None` -- a window still strictly inside a (possibly different, later)
+    fault always takes priority over an earlier fault's grace tail.
+
+    Exists because a window's features are a rolling summary over its whole
+    span (`_vector`'s mean/std/last), not a single instant: for up to one
+    window-span after a fault clears, the window can still carry some
+    fault-contaminated samples in its history and keep breaching the
+    detector's cutoff. Without this, that lingering breach is attributed to
+    whatever happens to be active when the 3rd consecutive breach lands --
+    which, for `intermittent`'s back-to-back bursts, is usually the *next*
+    episode, reported as a detection delay of 0s. See
+    `docs/results/practice-run.md`, "zero-second detection delays".
+    """
+    if grace <= timedelta(0):
+        return None
+    candidates = [i for i in intervals if i.end <= window.end < i.end + grace]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda i: i.end)
+
+
 @dataclass
 class _Tally:
     tp: int = 0
@@ -259,7 +297,19 @@ def _score_resource(
     tally: _Tally,
     detector_kwargs: dict[str, Any],
 ) -> None:
-    """Fit on this resource's normal train windows, score its test windows."""
+    """Fit on this resource's normal train windows, score its test windows.
+
+    **Episode boundaries reset the detector's hysteresis.** Right before the
+    first window strictly inside a new episode's fault interval, `reset()` is
+    called on the detector (if it has one -- a duck-typed extension, not part
+    of the frozen `AnomalyDetector` interface). Without this, a breach streak
+    that happened to be mid-count when episode N+1 begins -- whether from
+    episode N's own grace tail or unrelated false-alarm noise in the gap --
+    only needs one more breach to "detect" N+1 instantly, reporting a delay
+    near 0s that measures carried-over state, not how fast the detector
+    actually responded to this fault. See
+    `docs/results/practice-run.md`, "zero-second detection delays".
+    """
     if len(windows) < 10:
         return
 
@@ -274,24 +324,49 @@ def _score_resource(
 
     first_alarm: dict[int, datetime] = {}
     episodes_seen: set[int] = set()
+    active_episode: int | None = None
+    # Grace period for attributing a lingering detection to the episode it
+    # actually describes (see `_grace_fault_at`): one window's full span,
+    # since that bounds how long fault-contaminated samples can still sit in
+    # a window's rolling history after the fault itself has cleared.
+    grace = windows[0].end - windows[0].start if windows else timedelta(0)
 
     for window in windows[test_slice]:
         tally.test_windows += 1
         fault = _fault_at(window, intervals)
+
+        if fault is not None and fault.episode != active_episode:
+            reset = getattr(detector, "reset", None)
+            if callable(reset):
+                reset()
+            active_episode = fault.episode
+
         predicted = detector.is_anomaly(window)
 
         if fault is not None:
             episodes_seen.add(fault.episode)
             if predicted:
                 tally.tp += 1
-                if fault.episode not in first_alarm:
-                    first_alarm[fault.episode] = window.end
             else:
                 tally.fn += 1
         elif predicted:
             tally.fp += 1
         else:
             tally.tn += 1
+
+        if predicted:
+            # A detection before its episode's fault has even started is a
+            # false alarm, not a catch -- `fault`/`_grace_fault_at` only ever
+            # resolve to an interval at or after `interval.start`, so that
+            # exclusion falls out of the lookup itself rather than needing a
+            # separate check here.
+            credited = fault if fault is not None else _grace_fault_at(window, intervals, grace)
+            if (
+                credited is not None
+                and credited.episode in episodes_seen
+                and credited.episode not in first_alarm
+            ):
+                first_alarm[credited.episode] = window.end
 
     by_episode = {i.episode: i for i in intervals}
     tally.episodes_in_test += len(episodes_seen)
@@ -528,6 +603,33 @@ def render_markdown(results: list[EvalResult], manifest: dict[str, Any]) -> str:
         "confound rather than the detector. Every dataset since spans several full",
         "cycles, so the train slice has seen every phase of the daily curve. Any",
         "future dataset must do the same before it is split.",
+        "",
+        "**3. Isolation Forest reported a 0s detection delay, and the cause was a",
+        "hysteresis counter that outlived its episode.** FIXED — `_score_resource`",
+        "now resets the detector between episodes and attributes a lingering",
+        "post-fault breach to a grace period rather than to whatever comes next.",
+        "",
+        "On `v4`, `intermittent` schedules back-to-back ON/OFF bursts, each its own",
+        "label episode, only 20s apart (one collector step). A burst's rolling-",
+        "window features (`_vector`'s mean/std/last over the window's whole span)",
+        "stay elevated for a while after the burst ends, so the detector kept",
+        "breaching into the OFF gap. Because the consecutive-breach counter was",
+        "never reset, that leftover count only needed one more breach on the very",
+        "first window of the *next* burst to cross the 3-breach gate — reported as a",
+        "0s delay, which is impossible under the rule (3 breaches at a 20s step is",
+        "at least 40s). BEFORE: `intermittent`/`iforest` detected 14/15 episodes,",
+        "delay p50 0s, p95 40s, p99 40s — p50 below the hysteresis floor is the",
+        "tell. AFTER the same run: still 14/15, but p50 40s, p95 40s, p99 40s — on",
+        "the floor, never below it.",
+        "",
+        "The same stale count was also handing some episodes a few early windows'",
+        "worth of free credit, which is why the *pooled* iforest row moved too —",
+        "precision 0.507 -> 0.473, recall 0.551 -> 0.480, true positives 141 -> 123",
+        "(same test windows, same dataset, same fault sizes: nothing changed except",
+        "that the detector no longer gets to start an episode already most of the",
+        "way to a detection). Worse pooled numbers are the correct outcome here, not",
+        "a regression — they are what Isolation Forest actually does once each",
+        "episode is scored on its own.",
         "",
         "## Read this before quoting any number above",
         "",

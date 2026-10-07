@@ -38,6 +38,8 @@ from core.signals import DETECTOR_SIGNALS
 from ml.detectors import register
 from ml.detectors.threshold import CONSECUTIVE_BREACHES_REQUIRED, IQR_MULTIPLIER, _percentile
 
+_SECONDS_PER_DAY = 86_400.0
+
 # Per signal: mean, population std, and the most recent reading. Three summary
 # features beat the raw 12-sample series -- the series length can vary at the
 # edges of a collection gap, and a fixed-width vector cannot.
@@ -66,7 +68,17 @@ class IsolationForestDetector(AnomalyDetector):
         n_estimators: int = 100,
         random_state: int = 0,
         consecutive_breaches_required: int = CONSECUTIVE_BREACHES_REQUIRED,
+        use_time_of_day: bool = False,
     ) -> None:
+        """`use_time_of_day` is an opt-in switch, off by default: it appends
+        sin/cos-of-hour-of-day features (computed from `window.end`) to every
+        vector, so the forest can learn the daily seasonality curve as context
+        instead of treating every reading as if it arrived at the same hour.
+        Two features rather than one raw hour-of-day integer, so midnight and
+        23:59 sit next to each other in feature space instead of across the
+        forest's widest possible split. Default is off because it is
+        untested against the threshold baseline and changes what "normal"
+        means per hour -- see `docs/results/practice-run.md`."""
         self._forest = IsolationForest(
             n_estimators=n_estimators,
             # Unused on this code path: the cutoff comes from the IQR fence
@@ -82,8 +94,14 @@ class IsolationForestDetector(AnomalyDetector):
         self._required = consecutive_breaches_required
         self._last_explain: dict[str, Any] = {}
         self._fitted = False
+        self._use_time_of_day = use_time_of_day
 
     # -- features ---------------------------------------------------------
+
+    def _time_of_day_features(self, window: MetricWindow) -> list[float]:
+        seconds_of_day = window.end.hour * 3600 + window.end.minute * 60 + window.end.second
+        angle = 2 * math.pi * seconds_of_day / _SECONDS_PER_DAY
+        return [math.sin(angle), math.cos(angle)]
 
     def _vector(self, window: MetricWindow) -> list[float]:
         """Flattened per-signal summary, in the signal order fixed at `fit`.
@@ -92,6 +110,10 @@ class IsolationForestDetector(AnomalyDetector):
         never 0.0 -- absent means "no reading", and zero-filling would hand the
         forest a hard outlier that the data never contained (both metric docs
         state this rule explicitly).
+
+        When `use_time_of_day` is on, two more features (sin/cos of hour of
+        day) are appended last, after every signal -- so the signal order
+        fixed at `fit` is unaffected and only the tail of the vector changes.
         """
         vector: list[float] = []
         for signal in self._signals:
@@ -103,6 +125,8 @@ class IsolationForestDetector(AnomalyDetector):
             else:
                 fill = self._train_mean.get(signal, 0.0)
                 vector.extend([fill, self._train_std.get(signal, 0.0), fill])
+        if self._use_time_of_day:
+            vector.extend(self._time_of_day_features(window))
         return vector
 
     # -- AnomalyDetector --------------------------------------------------
@@ -208,3 +232,14 @@ class IsolationForestDetector(AnomalyDetector):
             "breaches_required": self._required,
             **self._last_explain,
         }
+
+    def reset(self) -> None:
+        """Clear hysteresis state. Not part of the frozen `AnomalyDetector`
+        interface -- a duck-typed extension the Week 10 harness calls between
+        fault episodes, so a breach streak building up at the tail of one
+        episode (or during the normal windows before the next one starts)
+        cannot borrow its way into the next episode's breach count and
+        manufacture an artificially fast detection. See
+        `docs/results/practice-run.md`, "zero-second detection delays"."""
+        self._consecutive_breaches = 0
+        self._last_explain = {}

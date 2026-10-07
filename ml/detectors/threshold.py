@@ -174,6 +174,17 @@ class ThresholdDetector(AnomalyDetector):
             **self._last_explain,
         }
 
+    def reset(self) -> None:
+        """Clear hysteresis state. Not part of the frozen `AnomalyDetector`
+        interface -- a duck-typed extension the Week 10 harness calls between
+        fault episodes, so a breach streak building up at the tail of one
+        episode (or during the normal windows before the next one starts)
+        cannot borrow its way into the next episode's breach count and
+        manufacture an artificially fast detection. See
+        `docs/results/practice-run.md`, "zero-second detection delays"."""
+        self._consecutive_breaches = 0
+        self._last_explain = {}
+
 
 @register("threshold_unscaled")
 class UnscaledThresholdDetector(ThresholdDetector):

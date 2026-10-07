@@ -6,6 +6,7 @@ __init__.py` only registers this detector if numpy/scikit-learn import.
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import UTC, datetime, timedelta
 
@@ -166,3 +167,75 @@ def test_fit_is_reproducible_for_a_fixed_random_state() -> None:
     probe = _window(97.0)
     assert a.score(probe) == pytest.approx(b.score(probe))
     assert a.decision_threshold == pytest.approx(b.decision_threshold)
+
+
+def test_reset_clears_an_in_progress_breach_streak() -> None:
+    """`reset()` is a duck-typed extension the Week 10 harness calls between
+    fault episodes (see ml/harness/evaluate.py and
+    docs/results/practice-run.md, "zero-second detection delays") -- not part
+    of the frozen `AnomalyDetector` interface. A streak that would trip on
+    its next breach must need all 3 again after a reset."""
+    detector = _fitted()
+    assert detector.is_anomaly(_window(97.0)) is False  # 1st breach
+    assert detector.is_anomaly(_window(98.0)) is False  # 2nd breach
+    detector.reset()
+    assert detector.is_anomaly(_window(99.0)) is False  # back to 1st, not 3rd
+    assert detector.is_anomaly(_window(99.0)) is False  # 2nd
+    assert detector.is_anomaly(_window(99.0)) is True  # 3rd -- now it trips
+
+
+# -- time-of-day (optional, off by default) --------------------------------
+
+
+def _window_at(hour: int, minute: int = 0, cpu: float = 30.0) -> MetricWindow:
+    end = datetime(2026, 1, 1, hour, minute, 0, tzinfo=UTC)
+    return MetricWindow(
+        resource_id="r1",
+        tenant_id="t1",
+        start=end - timedelta(seconds=110),
+        end=end,
+        step_seconds=10,
+        values={"cpu_percent": [cpu] * 12},
+    )
+
+
+def test_time_of_day_is_off_by_default() -> None:
+    detector = build("iforest")
+    assert isinstance(detector, IsolationForestDetector)
+    assert detector._use_time_of_day is False
+    detector.fit(_normal_windows())
+    # 2 training signals (cpu_percent, latency_p95) x 3 summary features,
+    # no sin/cos appended.
+    assert len(detector._vector(_window_at(14))) == 6
+
+
+def test_time_of_day_appends_sin_cos_features_when_enabled() -> None:
+    detector = build("iforest", use_time_of_day=True)
+    assert isinstance(detector, IsolationForestDetector)
+    detector.fit(_normal_windows())
+    vector = detector._vector(_window_at(hour=6, minute=0))  # 06:00 = quarter day
+    assert len(vector) == 8  # 2 signals x 3 summary features + sin + cos
+    assert vector[-2] == pytest.approx(1.0, abs=1e-9)  # sin(2*pi*0.25) == 1
+    assert vector[-1] == pytest.approx(0.0, abs=1e-9)  # cos(2*pi*0.25) == 0
+
+
+def test_time_of_day_midnight_and_just_before_are_close_in_feature_space() -> None:
+    """The whole point of sin/cos over a raw hour-of-day integer: 23:59 and
+    00:00 are adjacent on the clock and must land close together, not at
+    opposite ends of a 0-23 range."""
+    detector = build("iforest", use_time_of_day=True)
+    assert isinstance(detector, IsolationForestDetector)
+    detector.fit(_normal_windows())
+    midnight = detector._time_of_day_features(_window_at(hour=0, minute=0))
+    just_before = detector._time_of_day_features(_window_at(hour=23, minute=59))
+    distance = math.dist(midnight, just_before)
+    far_apart = math.dist(midnight, detector._time_of_day_features(_window_at(hour=12)))
+    assert distance < far_apart
+
+
+def test_time_of_day_does_not_change_the_threshold_detector() -> None:
+    """The switch lives entirely on `IsolationForestDetector`; `ThresholdDetector`
+    takes no such kwarg and must stay untouched."""
+    from ml.detectors.threshold import ThresholdDetector
+
+    assert "use_time_of_day" not in ThresholdDetector.__init__.__code__.co_varnames
