@@ -99,7 +99,10 @@ _RESOURCE_BY_ID: dict[str, Resource] = {r.id: r for r in _RESOURCES}
 #: (ADR convention: a dataset's manifest records which version produced it).
 #: v1-v5 predate this constant and are not touched or relabelled -- only
 #: datasets generated from here on carry it. 2: the clamp-at-zero fix below.
-SIMULATOR_VERSION = 2
+#: 3: latency switched from a normal draw to a log-normal one (same mean/std,
+#: different shape -- see `_draw_latency`), so a regenerated dataset's
+#: latency columns would carry a different low-tail shape than v1-v5's.
+SIMULATOR_VERSION = 3
 
 # (mean, std, ceiling) per signal. `math.inf` ceiling means "no natural cap"
 # (byte/count rates); percentages cap at 100.
@@ -183,15 +186,72 @@ _SEASONAL_SIGNALS: frozenset[str] = frozenset(
 #: no observable effect. Floored at 0.1 (the signal's own unit -- ms, per
 #: docs/metric-schema.md) instead of 0.0; the mean is unchanged, only the
 #: rare low tail moves.
+#:
+#: Now a safety net rather than the normal case: `_draw_latency` draws from
+#: a log-normal, which is strictly positive by construction, so a real
+#: draw landing at or below 0.1 should be astronomically rare (measured:
+#: 0/5000 for sim-cache-1's latency_p50, the baseline closest to zero --
+#: see `test_sim_cache_1_latency_p50_never_piles_up_on_the_floor`). Kept in
+#: case a future baseline is edited to sit much closer to zero, or a fault
+#: multiplier pushes a draw down rather than up.
 _POSITIVE_FLOOR: dict[str, float] = {
     "latency_p50": 0.1,
     "latency_p95": 0.1,
     "latency_p99": 0.1,
 }
 
+#: The three signals `_draw_latency` covers. Always present together or
+#: absent together (every kind's `_NOT_APPLICABLE_BY_KIND` entry excludes
+#: all of `_REQUEST_PATH`, never a subset of it), which is what lets
+#: `_enforce_latency_ordering` assume a complete triplet when any one of
+#: them is present.
+_LATENCY_SIGNALS: frozenset[str] = frozenset({"latency_p50", "latency_p95", "latency_p99"})
+
 
 def _clamp(value: float, ceiling: float, floor: float = 0.0) -> float:
     return max(floor, min(value, ceiling))
+
+
+def _lognormal_params(mean: float, std: float) -> tuple[float, float]:
+    """`(mu, sigma)` for `random.lognormvariate` such that the draw's own
+    mean and std -- on the real, non-log scale -- equal `mean`/`std`
+    exactly. Standard moment-matching identities for a log-normal:
+    `sigma**2 = ln(1 + (std/mean)**2)`, `mu = ln(mean) - sigma**2/2`.
+    Every latency baseline has `mean > 0`, so this never divides by zero or
+    logs a non-positive number.
+    """
+    sigma_squared = math.log(1.0 + (std / mean) ** 2)
+    mu = math.log(mean) - sigma_squared / 2.0
+    return mu, math.sqrt(sigma_squared)
+
+
+def _draw_latency(mean: float, std: float) -> float:
+    """Log-normal instead of Gaussian: same mean and std as the baseline
+    (via `_lognormal_params`), but a right-skewed shape that is strictly
+    positive and has a much lighter left tail -- a completed request's
+    latency looks like this in practice, and it is also why the
+    clamp-at-zero floor stops being load-bearing (see `_POSITIVE_FLOOR`).
+    `std <= 0` only happens if a future baseline sets it to exactly 0,
+    which `random.gauss` elsewhere in this module already treats as
+    "always return the mean"; mirrored here for the same reason."""
+    if std <= 0:
+        return mean
+    mu, sigma = _lognormal_params(mean, std)
+    return random.lognormvariate(mu, sigma)
+
+
+def _enforce_latency_ordering(signals: dict[str, float]) -> None:
+    """`latency_p50 <= latency_p95 <= latency_p99` must hold in every
+    reading, but `_draw_latency` draws each one independently, which can
+    invert the order in the tails (most likely for sim-cache-1, whose three
+    baselines sit closest together). Chaining a forward max -- rather than
+    re-drawing on inversion -- only nudges the rare inverted case up to
+    match its neighbour; it never touches the common case where the order
+    already holds, so it does not bias the bulk of the distribution."""
+    if "latency_p95" in signals and "latency_p50" in signals:
+        signals["latency_p95"] = max(signals["latency_p95"], signals["latency_p50"])
+    if "latency_p99" in signals and "latency_p95" in signals:
+        signals["latency_p99"] = max(signals["latency_p99"], signals["latency_p95"])
 
 
 def _seasonal_factor(now: datetime) -> float:
@@ -205,14 +265,30 @@ def _baseline_for(kind: str) -> dict[str, Baseline]:
 
 
 def _generate_signals(resource: Resource, now: datetime) -> dict[str, float]:
+    """One reading per applicable signal. Non-applicable signals are absent.
+
+    Latency is drawn, ordering-enforced, and floor-clamped only after every
+    other signal is in hand: `_enforce_latency_ordering` needs the raw p50/
+    p95/p99 draws together, and the floor is meant to catch what ordering
+    enforcement cannot (see `_POSITIVE_FLOOR`), so it runs last.
+    """
     baseline = _baseline_for(resource.kind)
     factor = _seasonal_factor(now)
     signals: dict[str, float] = {}
     for signal in CANONICAL_SIGNALS:
         mean, std, ceiling = baseline[signal]
         scaled_mean = mean * factor if signal in _SEASONAL_SIGNALS else mean
-        value = random.gauss(scaled_mean, std) if std > 0 else scaled_mean
-        signals[signal] = _clamp(value, ceiling, _POSITIVE_FLOOR.get(signal, 0.0))
+        if signal in _LATENCY_SIGNALS:
+            signals[signal] = _draw_latency(scaled_mean, std)
+        else:
+            value = random.gauss(scaled_mean, std) if std > 0 else scaled_mean
+            signals[signal] = _clamp(value, ceiling, _POSITIVE_FLOOR.get(signal, 0.0))
+
+    _enforce_latency_ordering(signals)
+    for signal in _LATENCY_SIGNALS:
+        if signal in signals:
+            _, _, ceiling = baseline[signal]
+            signals[signal] = _clamp(signals[signal], ceiling, _POSITIVE_FLOOR.get(signal, 0.0))
     return signals
 
 
