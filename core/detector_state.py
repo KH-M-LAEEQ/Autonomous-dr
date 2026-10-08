@@ -1,0 +1,48 @@
+"""Redis-backed "has this resource's detector fit yet" signal.
+
+`ml.tasks.detect_anomalies` fits one `AnomalyDetector` per resource exactly
+once, after `FIT_WINDOW_COUNT` windows of bootstrap history -- but that fit
+happens inside the Celery worker/beat process, not the API process, so
+nothing in the API's own memory can see it (same cross-process problem
+`core/faults.py` solves for fault injection, and the same fix: Redis, which
+already backs Celery per ADR-0006). The worker marks a resource fitted here
+the moment its detector actually fits; `/ready` reads it back, which is how
+`scripts/smoke.py`'s warm-up wait knows when to stop polling instead of
+guessing a fixed sleep.
+"""
+
+from __future__ import annotations
+
+import redis
+
+from core.config import get_settings
+from core.logging import get_logger
+
+log = get_logger(__name__)
+
+_KEY_PREFIX = "detector_fitted:"
+_client: redis.Redis | None = None
+
+
+def _get_client() -> redis.Redis:
+    global _client
+    if _client is None:
+        _client = redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+    return _client
+
+
+def mark_fitted(resource_id: str) -> None:
+    """No TTL -- once fit, a detector is never refit (`ml/tasks.py`), so
+    this stays true until the worker restarts and loses its own in-memory
+    `_fitted` set too."""
+    _get_client().set(f"{_KEY_PREFIX}{resource_id}", "1")
+
+
+def is_fitted(resource_id: str) -> bool:
+    """False, never raises, if Redis is unreachable -- the same
+    fail-safe-to-a-safe-default posture as `core.faults.get_fault`."""
+    try:
+        return bool(_get_client().exists(f"{_KEY_PREFIX}{resource_id}"))
+    except redis.RedisError:
+        log.warning("detector-fitted lookup failed for %s; redis unreachable", resource_id)
+        return False

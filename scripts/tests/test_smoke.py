@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
 import smoke
 
 from core.providers.simulated import applicable_signals
@@ -142,6 +143,81 @@ def test_real_zeros_on_error_rate_throttle_and_replication_lag_stay_allowed() ->
 
     assert smoke.applicability_problems(KIND, window) == []
     assert smoke.applicability_problems("database", db_window) == []
+
+
+class _FakeClock:
+    """Deterministic now()/sleep() pair for wait_for_detector_warm_up: sleep
+    advances the same clock now() reads, so the function's real 2s poll
+    cadence drives test assertions without a real wait."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def test_wait_for_detector_warm_up_returns_true_once_fitted() -> None:
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    def fake_is_fitted() -> bool:
+        calls["n"] += 1
+        return calls["n"] >= 3  # not fitted, not fitted, fitted
+
+    ok = smoke.wait_for_detector_warm_up(
+        "sim-web-1",
+        timeout_seconds=100,
+        progress_interval_seconds=30,
+        is_fitted=fake_is_fitted,
+        sleep=clock.sleep,
+        now=clock.now,
+    )
+
+    assert ok is True
+    assert calls["n"] == 3
+
+
+def test_wait_for_detector_warm_up_times_out_when_never_fitted() -> None:
+    clock = _FakeClock()
+
+    ok = smoke.wait_for_detector_warm_up(
+        "sim-web-1",
+        timeout_seconds=10,
+        progress_interval_seconds=5,
+        is_fitted=lambda: False,
+        sleep=clock.sleep,
+        now=clock.now,
+    )
+
+    assert ok is False
+    assert clock.t >= 10
+
+
+def test_wait_for_detector_warm_up_prints_progress_on_a_fixed_interval(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    clock = _FakeClock()
+
+    smoke.wait_for_detector_warm_up(
+        "sim-web-1",
+        timeout_seconds=65,
+        progress_interval_seconds=30,
+        is_fitted=lambda: False,
+        sleep=clock.sleep,
+        now=clock.now,
+    )
+
+    progress_lines = [
+        line for line in capsys.readouterr().out.splitlines() if "still waiting" in line
+    ]
+    # ~30s and ~60s within a 65s timeout -- two progress lines, not zero and
+    # not one-per-poll.
+    assert len(progress_lines) == 2
+    assert "sim-web-1" in progress_lines[0]
 
 
 def test_every_kind_is_internally_consistent_with_the_applicability_map() -> None:

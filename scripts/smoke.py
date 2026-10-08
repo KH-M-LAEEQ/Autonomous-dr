@@ -15,8 +15,10 @@ it does and why):
   4. Collector: after 2 minutes, every resource has InfluxDB rows with all
      25 fields present (null where not applicable -- never a zero standing
      in for a signal that does not apply).
-  5. Inject a fault through the API; within 60s a detection and an
-     incident row exist.
+  5. Wait (up to 7 minutes, polling /ready's detector_fitted field) for
+     sim-web-1's detector to warm up, THEN inject a fault through the API;
+     within 60s of that a detection and an incident row exist. The 60s
+     clock starts after warm-up, not before.
   6. run_incident on that incident: a decision with all four terms
      (weights sum to 1, the stored utility equals re-scoring the stored
      terms), a cost_estimates row written before the action row's status
@@ -424,9 +426,81 @@ def check_collector(wait_seconds: int = 120) -> CheckResult:
 
 # -- 5. Fault -> detection -> incident ---------------------------------------
 
+WARM_UP_TIMEOUT_SECONDS = 7 * 60
+WARM_UP_PROGRESS_INTERVAL_SECONDS = 30
+WARM_UP_POLL_INTERVAL_SECONDS = 2.0
+
+
+def _resource_is_fitted(resource_id: str) -> bool:
+    """Reads the `detector_fitted` field `/ready` exposes (api/routers/
+    health.py), which is itself backed by `core.detector_state` -- the
+    only way this process can see a fit that happened inside the worker/
+    beat process. Fails closed (not fitted) on any transport or shape
+    problem, same posture as the Redis-backed read underneath it."""
+    import json
+
+    status, body = _http_get("/ready")
+    if status != 200:
+        return False
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return False
+    return bool(data.get("detector_fitted", {}).get(resource_id, False))
+
+
+def wait_for_detector_warm_up(
+    resource_id: str,
+    timeout_seconds: float = WARM_UP_TIMEOUT_SECONDS,
+    progress_interval_seconds: float = WARM_UP_PROGRESS_INTERVAL_SECONDS,
+    poll_interval_seconds: float = WARM_UP_POLL_INTERVAL_SECONDS,
+    is_fitted: Callable[[], bool] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Polls `is_fitted` (default: `_resource_is_fitted(resource_id)` against
+    the real API) until it returns True or `timeout_seconds` elapses,
+    printing progress every `progress_interval_seconds`. `sleep`/`now` are
+    injectable so tests can run this with a fake clock instead of a real
+    7-minute wait.
+    """
+    check = is_fitted if is_fitted is not None else (lambda: _resource_is_fitted(resource_id))
+    start = now()
+    deadline = start + timeout_seconds
+    last_progress = start
+    while True:
+        if check():
+            return True
+        current = now()
+        if current >= deadline:
+            return False
+        if current - last_progress >= progress_interval_seconds:
+            print(
+                f"    (still waiting for {resource_id}'s detector to warm up -- "
+                f"{current - start:.0f}s/{timeout_seconds:.0f}s)",
+                flush=True,
+            )
+            last_progress = current
+        sleep(poll_interval_seconds)
+
 
 def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
     from core.incidents import find_open_incident
+
+    print(
+        f"    (waiting up to {WARM_UP_TIMEOUT_SECONDS}s for {RESOURCE_HAPPY_PATH}'s detector "
+        "to warm up...)",
+        flush=True,
+    )
+    if not wait_for_detector_warm_up(RESOURCE_HAPPY_PATH):
+        return CheckResult(
+            "5. Fault -> detection -> incident",
+            False,
+            "detector never warmed up",
+            look_at="ml/tasks.py detect_anomalies -- FIT_WINDOW_COUNT=30 means ~5 minutes of "
+            "bootstrap history is needed before the detector fits at all; check /ready's "
+            f"detector_fitted.{RESOURCE_HAPPY_PATH!r} and the worker/beat container logs",
+        )
 
     status, body = _http_post(
         "/api/v1/faults",
@@ -440,6 +514,9 @@ def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
             look_at="api/routers/actions.py inject_fault",
         )
 
+    # The 60s fault-to-incident limit starts here, AFTER warm-up -- the
+    # detector is already fitted by this point, so it is a real latency
+    # budget, not a disguised bootstrap wait.
     print(f"    (waiting up to {wait_seconds}s for a detection + incident...)", flush=True)
     deadline = time.monotonic() + wait_seconds
     incident_id = None
@@ -453,10 +530,9 @@ def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
         return CheckResult(
             "5. Fault -> detection -> incident",
             False,
-            f"no open incident for {RESOURCE_HAPPY_PATH} within {wait_seconds}s of fault injection",
-            look_at="ml/tasks.py detect_anomalies -- FIT_WINDOW_COUNT=30 means ~5 minutes of "
-            "bootstrap history is needed before the detector fits at all; if the collector has "
-            "not been running that long yet, this is expected, not a bug",
+            f"no open incident for {RESOURCE_HAPPY_PATH} within {wait_seconds}s of fault "
+            "injection (detector was already warmed up, so this is a real miss, not bootstrap)",
+            look_at="ml/tasks.py detect_anomalies / worker container logs",
         )
     return CheckResult(
         "5. Fault -> detection -> incident",

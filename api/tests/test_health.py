@@ -24,4 +24,10 @@ def test_ready_reports_dependencies() -> None:
     response = client.get("/ready")
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"ready", "postgres", "influxdb", "config"}
+    assert set(body) == {"ready", "postgres", "influxdb", "config", "detector_fitted"}
+    # Whether Postgres happens to be reachable in this test environment or
+    # not, the field itself must always be present, always a bool-valued
+    # mapping, and must never make /ready itself fail (core/detector_state.
+    # is_fitted() fails safe to False rather than raising).
+    assert isinstance(body["detector_fitted"], dict)
+    assert all(isinstance(v, bool) for v in body["detector_fitted"].values())

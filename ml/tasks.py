@@ -22,6 +22,7 @@ import asyncio
 from datetime import UTC, datetime
 
 from core import influx
+from core.detector_state import mark_fitted
 from core.incidents import find_open_incident, open_incident
 from core.interfaces.anomaly_detector import AnomalyDetector
 from core.logging import get_logger
@@ -63,6 +64,7 @@ async def _check_resource(resource_id: str, tenant_id: str) -> None:
             return  # still bootstrapping -- not enough history to fit yet
         detector.fit(history)
         _fitted.add(resource_id)
+        mark_fitted(resource_id)  # cross-process signal -- see core/detector_state.py
         del _history[resource_id]  # history has done its job; don't hold it forever
         return  # the window that completed the fit isn't also scored
 
