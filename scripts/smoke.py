@@ -539,12 +539,16 @@ def _latest_detection_at_or_after(resource_id: str, t0: datetime) -> datetime | 
     with session_scope() as session:
         row = session.execute(
             text(
-                "SELECT MIN(detected_at) AS t FROM detections "
+                "SELECT MIN(detected_at) AS earliest_detected_at FROM detections "
                 "WHERE resource_id = :r AND detected_at >= :t0"
             ),
             {"r": resource_id, "t0": t0},
         ).first()
-    return row.t if row is not None else None
+    # `AS t` used to collide with Row's own deprecated `.t` attribute --
+    # `row.t` silently returned the Row itself, not the column, which
+    # TypeErrors two calls later in compute_gate_a_timings's `ts - t0`
+    # rather than here. Named unambiguously now.
+    return row.earliest_detected_at if row is not None else None
 
 
 #: Not 60s: ml.tasks.LOOKBACK_SECONDS=120 means the window right after
