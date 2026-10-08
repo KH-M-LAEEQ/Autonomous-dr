@@ -45,9 +45,14 @@ def test_a_real_zero_on_an_applicable_signal_passes() -> None:
 
 
 def test_every_applicable_signal_zero_still_passes() -> None:
-    """Values are not inspected at all for applicable signals -- even
-    every single one reading exactly 0.0 is structurally fine."""
-    window = {signal: [0.0] for signal in _APPLICABLE}
+    """Values are not inspected for applicable signals -- every single one
+    reading exactly 0.0 is structurally fine -- EXCEPT latency_p50/p95/p99,
+    which are the one deliberate exception (see `smoke._LATENCY_SIGNALS`):
+    a completed request cannot take 0ms, so those are excluded from this
+    all-zero sweep and covered by their own tests instead."""
+    window = {
+        signal: [0.0] if signal not in smoke._LATENCY_SIGNALS else [1.0] for signal in _APPLICABLE
+    }
     assert smoke.applicability_problems(KIND, window) == []
 
 
@@ -104,6 +109,39 @@ def test_an_empty_list_for_an_applicable_signal_counts_as_missing() -> None:
     problems = smoke.applicability_problems(KIND, window)
 
     assert any(signal in p and "missing/null" in p for p in problems)
+
+
+def test_a_zero_latency_reading_fails_even_though_it_is_present() -> None:
+    """latency_p50 == 0.0 is present (not missing/null) and applicable to
+    this kind, but a completed request cannot take exactly 0ms -- it is
+    the null-vs-zero bug, most likely a zero-fill downstream of the
+    collector (core/providers/simulated.py floors at 0.1, never 0.0)."""
+    window = _full_valid_window({"latency_p50": 0.0})
+
+    problems = smoke.applicability_problems(KIND, window)
+
+    assert len(problems) == 1
+    assert "latency_p50" in problems[0]
+    assert "latency cannot be zero, likely zero-fill" in problems[0]
+
+
+def test_real_zeros_on_error_rate_throttle_and_replication_lag_stay_allowed() -> None:
+    """The exact opposite case from the latency rule above: 0.0 is each of
+    these signals' genuinely common reading (nothing went wrong / fully
+    caught up), so none of them should ever trip the new latency-only
+    check -- only latency_p50/p95/p99 are special-cased."""
+    # web_service reports error_rate_5xx but not throttle_count/
+    # replication_lag_seconds (see _NOT_APPLICABLE_BY_KIND); database
+    # reports all three, so it covers the other two.
+    window = _full_valid_window({"error_rate_5xx": 0.0})
+    db_applicable = set(applicable_signals("database"))
+    db_window = {signal: [1.0] for signal in db_applicable}
+    db_window.update(
+        {"error_rate_5xx": [0.0], "throttle_count": [0.0], "replication_lag_seconds": [0.0]}
+    )
+
+    assert smoke.applicability_problems(KIND, window) == []
+    assert smoke.applicability_problems("database", db_window) == []
 
 
 def test_every_kind_is_internally_consistent_with_the_applicability_map() -> None:

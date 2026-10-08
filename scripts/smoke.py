@@ -333,6 +333,18 @@ def check_api_health() -> CheckResult:
 # -- 4. Collector ------------------------------------------------------------
 
 
+#: The one exception to "never look at the value": a completed request
+#: cannot take exactly 0ms, so an exact 0.0 here is not a real reading, it
+#: is the null-vs-zero bug (see core/providers/simulated.py's
+#: `_POSITIVE_FLOOR`) showing up downstream -- most likely a zero-fill
+#: somewhere between the collector and InfluxDB rather than the simulator
+#: itself (which floors at 0.1, never 0.0). error_rate_5xx, throttle_count,
+#: and replication_lag_seconds are deliberately NOT in this set: 0.0 is
+#: their genuinely common reading (nothing went wrong / fully caught up),
+#: same as every other applicable signal this function never inspects.
+_LATENCY_SIGNALS: frozenset[str] = frozenset({"latency_p50", "latency_p95", "latency_p99"})
+
+
 def applicability_problems(kind: str, values: dict[str, list[float]]) -> list[str]:
     """Checks STRUCTURE, not values -- the applicability map
     (`core.providers.simulated.applicable_signals`) says which signals a
@@ -342,6 +354,8 @@ def applicability_problems(kind: str, values: dict[str, list[float]]) -> list[st
     0.0 (error rate, throttle count, ...) on an applicable signal is not a
     problem, and this function cannot even see it one way or the other --
     only a non-applicable signal showing up AT ALL (0.0 included) is.
+
+    The one exception is latency: see `_LATENCY_SIGNALS`.
 
     Returns one string per violation, signal name first so a caller can
     prefix it with whatever resource this was.
@@ -356,6 +370,8 @@ def applicability_problems(kind: str, values: dict[str, list[float]]) -> list[st
     for signal in sorted(applicable):
         if not values.get(signal):
             problems.append(f"{signal}: applicable to {kind!r} but missing/null")
+        elif signal in _LATENCY_SIGNALS and 0.0 in values[signal]:
+            problems.append(f"{signal}: latency cannot be zero, likely zero-fill")
     for signal in sorted(not_applicable):
         if values.get(signal):
             problems.append(
