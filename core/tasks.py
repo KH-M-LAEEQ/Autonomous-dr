@@ -9,10 +9,13 @@ statement in core's source, so it doesn't violate the layering rule.
 
 from celery import Celery
 from celery.schedules import crontab  # noqa: F401  -- used from Week 8
+from celery.signals import worker_ready
 
 from core.config import get_settings
+from core.logging import get_logger
 
 settings = get_settings()
+log = get_logger(__name__)
 
 app = Celery(
     "autonomousdr",
@@ -33,6 +36,26 @@ app.conf.update(
         "detect-anomalies": {"task": "ml.tasks.detect_anomalies", "schedule": 10.0},
     },
 )
+
+
+@worker_ready.connect
+def _clear_stale_fitted_flags(**kwargs: object) -> None:
+    """A fresh worker process's `ml.tasks._fitted` set starts empty, so any
+    `detector_fitted:*` Redis key surviving from a PREVIOUS worker process
+    is stale -- see `core.detector_state.clear_all_fitted`'s docstring.
+    Runs once, right after this worker finishes booting, before it starts
+    pulling tasks off the queue.
+    """
+    cleared = _clear_stale_fitted_flags_impl()
+    log.info("cleared %d stale detector-fitted flag(s) on worker start", cleared)
+
+
+def _clear_stale_fitted_flags_impl() -> int:
+    """Split from the signal handler so a test can call this directly
+    without sending a real Celery signal."""
+    from core.detector_state import clear_all_fitted
+
+    return clear_all_fitted()
 
 
 @app.task(name="core.tasks.collect_telemetry")

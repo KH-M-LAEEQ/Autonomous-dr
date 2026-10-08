@@ -46,3 +46,26 @@ def is_fitted(resource_id: str) -> bool:
     except redis.RedisError:
         log.warning("detector-fitted lookup failed for %s; redis unreachable", resource_id)
         return False
+
+
+def clear_all_fitted() -> int:
+    """Deletes every `detector_fitted:*` key. Called once, from `core.
+    tasks`' `worker_ready` signal handler: a freshly started worker
+    process has an empty in-memory `_fitted` set and `_history` dict
+    (`ml/tasks.py`'s module-level state resets with the process), so any
+    flag left over from a PREVIOUS worker process is stale -- it would
+    tell `/ready` a resource is fitted when THIS worker hasn't fit
+    anything yet, which is exactly backwards for a readiness signal.
+    Returns the number of keys deleted (0 if Redis is unreachable, rather
+    than raising -- a cleared cache that fails to clear just means the
+    next warm-up wait takes a bit longer, not a worker that won't start).
+    """
+    try:
+        client = _get_client()
+        keys = list(client.scan_iter(match=f"{_KEY_PREFIX}*"))
+        if keys:
+            client.delete(*keys)
+        return len(keys)
+    except redis.RedisError:
+        log.warning("clear_all_fitted failed; redis unreachable")
+        return 0
