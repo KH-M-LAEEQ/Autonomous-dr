@@ -554,9 +554,31 @@ def _latest_detection_at_or_after(resource_id: str, t0: datetime) -> datetime | 
 FAULT_TO_INCIDENT_WAIT_SECONDS = 180
 
 
-def check_fault_to_detection(wait_seconds: int = FAULT_TO_INCIDENT_WAIT_SECONDS) -> CheckResult:
-    from core.incidents import find_open_incident, get_incident
+def _earliest_incident_at_or_after(resource_id: str, t0: datetime) -> Any | None:
+    """The first incident opened for `resource_id` at or after `t0`,
+    REGARDLESS of its current state -- unlike `find_open_incident`, which
+    only sees incidents still in a non-terminal state. The autonomous
+    worker (core.incident_tasks.process_incident) can resolve an incident
+    within milliseconds of opening it, faster than this check's own 2s
+    poll interval, so a currently-open-only lookup can miss it entirely
+    even though it both opened and resolved correctly in between polls.
+    """
+    from sqlalchemy import text
 
+    from core.db import session_scope
+
+    with session_scope() as session:
+        row = session.execute(
+            text(
+                "SELECT id FROM incidents WHERE resource_id = :r AND opened_at >= :t0 "
+                "ORDER BY opened_at ASC LIMIT 1"
+            ),
+            {"r": resource_id, "t0": t0},
+        ).first()
+    return row.id if row is not None else None
+
+
+def check_fault_to_detection(wait_seconds: int = FAULT_TO_INCIDENT_WAIT_SECONDS) -> CheckResult:
     print(
         f"    (waiting up to {WARM_UP_TIMEOUT_SECONDS}s for {RESOURCE_HAPPY_PATH}'s detector "
         "to warm up...)",
@@ -596,20 +618,18 @@ def check_fault_to_detection(wait_seconds: int = FAULT_TO_INCIDENT_WAIT_SECONDS)
     # The fault-to-incident limit starts here, AFTER warm-up -- the
     # detector is already fitted by this point, so it is a real latency
     # budget, not a disguised bootstrap wait. Only an incident OPENED AT OR
-    # AFTER t0 counts -- find_open_incident alone can't tell "caused by
-    # this fault" apart from "already open for some unrelated reason";
-    # _close_stale_incidents should have left none, but this is the actual
-    # acceptance check, not a belief that cleanup always works.
+    # AFTER t0 counts, checked via _earliest_incident_at_or_after rather
+    # than find_open_incident -- _close_stale_incidents should have left
+    # none open, but this is the actual acceptance check, not a belief
+    # that cleanup always works, and it must not miss an incident that
+    # the autonomous worker already resolved between polls.
     print(f"    (waiting up to {wait_seconds}s for a detection + incident after t0...)", flush=True)
     deadline = time.monotonic() + wait_seconds
     incident_id = None
     while time.monotonic() < deadline:
-        candidate = find_open_incident(RESOURCE_HAPPY_PATH)
-        if candidate is not None:
-            incident = get_incident(candidate)
-            if incident is not None and incident["opened_at"] >= t0:
-                incident_id = candidate
-                break
+        incident_id = _earliest_incident_at_or_after(RESOURCE_HAPPY_PATH, t0)
+        if incident_id is not None:
+            break
         time.sleep(2.0)
 
     if incident_id is None:
