@@ -160,6 +160,78 @@ class _FakeClock:
         self.t += seconds
 
 
+def test_close_stale_incidents_resolves_through_the_state_machine_and_audit_logs_it() -> None:
+    """Check 5's cleanup step must never raw-UPDATE an incident closed --
+    this confirms it goes through core.incidents.transition (so the normal
+    state machine validates it) and core.repo.audit.append_entry (so the
+    hash chain stays intact), on a real throwaway tenant/resource/incident.
+    Skips if Postgres is unreachable, same idiom as core/tests/conftest.py.
+    """
+    from uuid import uuid4
+
+    from sqlalchemy import text
+
+    from core.db import ping, session_scope
+    from core.incidents import open_incident
+
+    if not ping():
+        pytest.skip("Postgres is unreachable -- start it with `make up && make migrate`")
+
+    tenant_id = f"tenant-smoke-test-{uuid4().hex[:10]}"
+    resource_id = f"{tenant_id}-resource"
+    with session_scope() as session:
+        session.execute(
+            text("INSERT INTO tenants (id, name, monthly_budget_usd) VALUES (:id, :id, 25.0)"),
+            {"id": tenant_id},
+        )
+        session.execute(
+            text(
+                "INSERT INTO resources (id, tenant_id, provider, region, kind, name) "
+                "VALUES (:id, :tenant_id, 'simulated', 'sim-us-east-1', 'web_service', :id)"
+            ),
+            {"id": resource_id, "tenant_id": tenant_id},
+        )
+    try:
+        incident_id = open_incident(tenant_id, resource_id)
+
+        closed = smoke._close_stale_incidents(resource_id, tenant_id)
+
+        assert closed == 1
+        with session_scope() as session:
+            incident_row = session.execute(
+                text("SELECT state FROM incidents WHERE id = :i"), {"i": str(incident_id)}
+            ).first()
+            audit_row = session.execute(
+                text(
+                    "SELECT payload FROM audit_log "
+                    "WHERE action = 'incident.closed_by_smoke_cleanup' "
+                    "AND payload->>'incident_id' = :i"
+                ),
+                {"i": str(incident_id)},
+            ).first()
+        assert incident_row is not None
+        assert incident_row.state == "failed"  # via transition(), not a raw UPDATE
+        assert audit_row is not None
+        assert audit_row.payload["previous_state"] == "open"
+
+        # Nothing left open -- a second call is a true no-op.
+        assert smoke._close_stale_incidents(resource_id, tenant_id) == 0
+    finally:
+        # Never audit_log: it is hash-chained and global across tenants --
+        # deleting any row from it (even this tenant's) would break
+        # verify_chain for every row inserted after it. See core/tests/
+        # test_loop.py's _cleanup() for the same rule. That in turn means
+        # the tenant/resource rows can't be deleted either (audit_log.
+        # tenant_id has an FK to tenants.id) -- only the incident itself,
+        # which nothing references, is safe to clean up. The tenant/
+        # resource rows are small, uniquely named per run, and harmless
+        # to leave behind, same as this suite already tolerates elsewhere.
+        with session_scope() as session:
+            session.execute(
+                text("DELETE FROM incidents WHERE tenant_id = :t"), {"t": tenant_id}
+            )
+
+
 def test_wait_for_detector_warm_up_returns_true_once_fitted() -> None:
     clock = _FakeClock()
     calls = {"n": 0}

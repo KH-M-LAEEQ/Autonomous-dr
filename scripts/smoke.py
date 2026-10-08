@@ -484,8 +484,64 @@ def wait_for_detector_warm_up(
         sleep(poll_interval_seconds)
 
 
+def _close_stale_incidents(resource_id: str, tenant_id: str) -> int:
+    """Resolves/closes any already-open incident for `resource_id` through
+    the normal state machine -- never a raw UPDATE -- before this check
+    injects its own fault, so a stale incident left over from an earlier
+    run can't make `find_open_incident` return a false PASS for a fault
+    this run never caused (see docs/notes/smoke-2026-10-08.md: that is
+    exactly what happened once run_incident started running autonomously).
+
+    OPEN/DECIDING/ACTING can all move straight to FAILED per core.
+    incidents.VALID_TRANSITIONS. Each closure gets its own audit_log entry
+    (through append_entry, so the hash chain stays intact) rather than
+    disappearing silently. Returns how many incidents were closed.
+    """
+    from core.incidents import find_open_incident, get_incident, transition
+    from core.models.enums import IncidentState
+    from core.repo.audit import append_entry
+
+    closed = 0
+    while True:
+        incident_id = find_open_incident(resource_id)
+        if incident_id is None:
+            return closed
+        incident = get_incident(incident_id)
+        assert incident is not None
+        current_state = IncidentState(incident["state"])
+        transition(incident_id, current_state, IncidentState.FAILED)
+        append_entry(
+            actor="scripts.smoke",
+            action="incident.closed_by_smoke_cleanup",
+            payload={
+                "incident_id": str(incident_id),
+                "resource_id": resource_id,
+                "previous_state": current_state.value,
+                "reason": "pre-existing open incident cleared before check 5's fault injection",
+            },
+            tenant_id=tenant_id,
+        )
+        closed += 1
+
+
+def _latest_detection_at_or_after(resource_id: str, t0: datetime) -> datetime | None:
+    from sqlalchemy import text
+
+    from core.db import session_scope
+
+    with session_scope() as session:
+        row = session.execute(
+            text(
+                "SELECT MIN(detected_at) AS t FROM detections "
+                "WHERE resource_id = :r AND detected_at >= :t0"
+            ),
+            {"r": resource_id, "t0": t0},
+        ).first()
+    return row.t if row is not None else None
+
+
 def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
-    from core.incidents import find_open_incident
+    from core.incidents import find_open_incident, get_incident
 
     print(
         f"    (waiting up to {WARM_UP_TIMEOUT_SECONDS}s for {RESOURCE_HAPPY_PATH}'s detector "
@@ -502,6 +558,15 @@ def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
             f"detector_fitted.{RESOURCE_HAPPY_PATH!r} and the worker/beat container logs",
         )
 
+    closed = _close_stale_incidents(RESOURCE_HAPPY_PATH, TENANT_HAPPY_PATH)
+    if closed:
+        print(
+            f"    (closed {closed} pre-existing open incident(s) for {RESOURCE_HAPPY_PATH} "
+            "before injecting)",
+            flush=True,
+        )
+
+    t0 = datetime.now(UTC)
     status, body = _http_post(
         "/api/v1/faults",
         {"resource_id": RESOURCE_HAPPY_PATH, "fault_type": "cpu_hog", "duration_seconds": 180},
@@ -516,49 +581,91 @@ def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
 
     # The 60s fault-to-incident limit starts here, AFTER warm-up -- the
     # detector is already fitted by this point, so it is a real latency
-    # budget, not a disguised bootstrap wait.
-    print(f"    (waiting up to {wait_seconds}s for a detection + incident...)", flush=True)
+    # budget, not a disguised bootstrap wait. Only an incident OPENED AT OR
+    # AFTER t0 counts -- find_open_incident alone can't tell "caused by
+    # this fault" apart from "already open for some unrelated reason";
+    # _close_stale_incidents should have left none, but this is the actual
+    # acceptance check, not a belief that cleanup always works.
+    print(f"    (waiting up to {wait_seconds}s for a detection + incident after t0...)", flush=True)
     deadline = time.monotonic() + wait_seconds
     incident_id = None
     while time.monotonic() < deadline:
-        incident_id = find_open_incident(RESOURCE_HAPPY_PATH)
-        if incident_id is not None:
-            break
+        candidate = find_open_incident(RESOURCE_HAPPY_PATH)
+        if candidate is not None:
+            incident = get_incident(candidate)
+            if incident is not None and incident["opened_at"] >= t0:
+                incident_id = candidate
+                break
         time.sleep(2.0)
 
     if incident_id is None:
         return CheckResult(
             "5. Fault -> detection -> incident",
             False,
-            f"no open incident for {RESOURCE_HAPPY_PATH} within {wait_seconds}s of fault "
-            "injection (detector was already warmed up, so this is a real miss, not bootstrap)",
+            f"no incident for {RESOURCE_HAPPY_PATH} opened at or after t0={t0.isoformat()} "
+            f"within {wait_seconds}s of fault injection (detector was already warmed up, so "
+            "this is a real miss, not bootstrap)",
             look_at="ml/tasks.py detect_anomalies / worker container logs",
         )
+    detected_at = _latest_detection_at_or_after(RESOURCE_HAPPY_PATH, t0)
     return CheckResult(
         "5. Fault -> detection -> incident",
         True,
-        f"incident {incident_id} open for {RESOURCE_HAPPY_PATH}",
-        detail={"incident_id": str(incident_id)},
+        f"incident {incident_id} open for {RESOURCE_HAPPY_PATH} (opened at or after t0)",
+        detail={"incident_id": str(incident_id), "t0": t0, "detected_at": detected_at},
     )
 
 
 # -- 6. run_incident ----------------------------------------------------------
 
+RUN_INCIDENT_WAIT_SECONDS = 60
+RUN_INCIDENT_POLL_SECONDS = 1.0
 
-async def _run_incident_check(incident_id: Any) -> CheckResult:
+
+def _wait_for_incident_terminal(
+    incident_id: Any, wait_seconds: float = RUN_INCIDENT_WAIT_SECONDS
+) -> Any | None:
+    """Polls `core.incidents.get_incident` until the WORKER's own
+    `core.incident_tasks.process_incident` (enqueued by `ml.tasks.
+    detect_anomalies` the instant it opened this incident) has driven it to
+    a terminal state. This check no longer calls `run_incident` itself --
+    it only observes. Returns `None` on timeout."""
+    from core.incidents import get_incident
+    from core.models.enums import IncidentState
+
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        incident = get_incident(incident_id)
+        if incident is not None:
+            state = IncidentState(incident["state"])
+            if state in (IncidentState.RESOLVED, IncidentState.FAILED):
+                return state
+        time.sleep(RUN_INCIDENT_POLL_SECONDS)
+    return None
+
+
+def check_run_incident(incident_id: Any) -> CheckResult:
     from sqlalchemy import text
 
-    from core.consensus.quorum import QuorumConsensus
     from core.db import session_scope
     from core.decision.utility import score
-    from core.loop import run_incident
     from core.models.enums import IncidentState
-    from core.pricing import StaticPriceTable
-    from core.providers.simulated_executor import SimulatedExecutor
 
-    final_state = await run_incident(
-        incident_id, StaticPriceTable(), SimulatedExecutor(), QuorumConsensus(node_id="node-a")
+    print(
+        f"    (waiting up to {RUN_INCIDENT_WAIT_SECONDS}s for the worker's own run_incident...)",
+        flush=True,
     )
+    final_state = _wait_for_incident_terminal(incident_id)
+    if final_state is None:
+        return CheckResult(
+            "6. run_incident loop",
+            False,
+            f"incident never reached a terminal state within {RUN_INCIDENT_WAIT_SECONDS}s -- "
+            "was it actually enqueued?",
+            look_at="worker container logs; core/incident_tasks.py process_incident; "
+            "ml/tasks.py's open_incident call site should be followed by "
+            "process_incident.delay(...)",
+        )
     if final_state != IncidentState.RESOLVED:
         return CheckResult(
             "6. run_incident loop",
@@ -621,14 +728,9 @@ async def _run_incident_check(incident_id: Any) -> CheckResult:
     return CheckResult(
         "6. run_incident loop",
         True,
-        f"decision utility={decision.utility:.4f}, action {action.id} succeeded, incident resolved",
+        f"decision utility={decision.utility:.4f}, action {action.id} succeeded, incident "
+        "resolved (via the autonomous worker, not called from smoke)",
     )
-
-
-def check_run_incident(incident_id: Any) -> CheckResult:
-    import asyncio
-
-    return asyncio.run(_run_incident_check(incident_id))
 
 
 # -- 7. Budget gate -----------------------------------------------------------
