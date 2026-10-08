@@ -733,6 +733,85 @@ def check_run_incident(incident_id: Any) -> CheckResult:
     )
 
 
+# -- Gate A timings ------------------------------------------------------------
+
+GATE_A_ACTION_LIMIT_SECONDS = 60.0
+
+
+def _fmt_gate(value: float | None) -> str:
+    return f"{value:.2f}s" if value is not None else "N/A"
+
+
+def compute_gate_a_timings(incident_id: Any, t0: datetime) -> dict[str, float | None]:
+    """Five fault-relative durations for the check-5/6 incident, all
+    computed from DB/audit_log timestamps rather than anything smoke
+    itself measured with a stopwatch -- the same rows checks 4-6 already
+    verify exist. `None` means that step's timestamp was never recorded
+    (not yet reached, or this run never got that far).
+    """
+    from sqlalchemy import text
+
+    from core.db import session_scope
+
+    with session_scope() as session:
+        incident_row = session.execute(
+            text("SELECT opened_at, closed_at, state FROM incidents WHERE id = :i"),
+            {"i": str(incident_id)},
+        ).first()
+        decision_row = session.execute(
+            text(
+                "SELECT created_at FROM audit_log WHERE action = 'incident.decision_made' "
+                "AND payload->>'incident_id' = :i ORDER BY created_at ASC LIMIT 1"
+            ),
+            {"i": str(incident_id)},
+        ).first()
+        action_row = session.execute(
+            text(
+                "SELECT created_at FROM audit_log WHERE action = 'incident.action_executed' "
+                "AND payload->>'incident_id' = :i AND payload->>'status' = 'succeeded' "
+                "ORDER BY created_at ASC LIMIT 1"
+            ),
+            {"i": str(incident_id)},
+        ).first()
+
+    detected_at = _latest_detection_at_or_after(RESOURCE_HAPPY_PATH, t0)
+
+    def _delta(ts: datetime | None) -> float | None:
+        return (ts - t0).total_seconds() if ts is not None else None
+
+    resolved_at = None
+    if incident_row is not None and incident_row.state == "resolved":
+        resolved_at = incident_row.closed_at
+
+    return {
+        "fault_to_detection": _delta(detected_at),
+        "fault_to_incident": _delta(incident_row.opened_at if incident_row else None),
+        "fault_to_decision": _delta(decision_row.created_at if decision_row else None),
+        "fault_to_action_succeeded": _delta(action_row.created_at if action_row else None),
+        "fault_to_incident_resolved": _delta(resolved_at),
+    }
+
+
+def render_gate_a(timings: dict[str, float | None]) -> list[str]:
+    action_dt = timings["fault_to_action_succeeded"]
+    gate_pass = action_dt is not None and action_dt < GATE_A_ACTION_LIMIT_SECONDS
+    lines = [
+        "",
+        "## Gate A timings",
+        "",
+        f"- fault-to-detection: {_fmt_gate(timings['fault_to_detection'])}",
+        f"- fault-to-incident: {_fmt_gate(timings['fault_to_incident'])}",
+        f"- fault-to-decision: {_fmt_gate(timings['fault_to_decision'])}",
+        f"- fault-to-action-succeeded: {_fmt_gate(action_dt)}",
+        f"- fault-to-incident-resolved: {_fmt_gate(timings['fault_to_incident_resolved'])}",
+        "",
+        f"**Gate A: {'PASS' if gate_pass else 'FAIL'}** "
+        f"(fault-to-action-succeeded = {_fmt_gate(action_dt)}, "
+        f"limit {GATE_A_ACTION_LIMIT_SECONDS:.0f}s)",
+    ]
+    return lines
+
+
 # -- 7. Budget gate -----------------------------------------------------------
 
 
@@ -1002,6 +1081,7 @@ def check_suites() -> CheckResult:
 def main() -> int:
     checks: list[CheckResult] = []
     incident_id: Any = None
+    gate_a_lines: list[str] = []
 
     def run_one(label: str, fn: Callable[[], CheckResult]) -> bool:
         print(f"-> {label}", flush=True)
@@ -1033,21 +1113,35 @@ def main() -> int:
                 print(f"   look at: {fault_result.look_at}")
             return _finish(checks)
         incident_id = fault_result.detail["incident_id"]
+        t0 = fault_result.detail["t0"]
 
-        if not run_one("6. run_incident loop", lambda: check_run_incident(incident_id)):
-            return _finish(checks)
+        print("-> 6. run_incident loop", flush=True)
+        check6_result = check_run_incident(incident_id)
+        checks.append(check6_result)
+        print(f"   {'PASS' if check6_result.passed else 'FAIL'}: {check6_result.reason}")
+        if not check6_result.passed and check6_result.look_at:
+            print(f"   look at: {check6_result.look_at}")
+
+        # Gate A is computed whether check 6 passed or not -- a partial set
+        # of timings (e.g. detection recorded, decision never reached) is
+        # still useful, and "never recorded" is itself the FAIL reason.
+        gate_a_lines = render_gate_a(compute_gate_a_timings(incident_id, t0))
+        print("\n".join(gate_a_lines))
+
+        if not check6_result.passed:
+            return _finish(checks, gate_a_lines)
         if not run_one("7. Budget gate", check_budget_gate):
-            return _finish(checks)
+            return _finish(checks, gate_a_lines)
         if not run_one("8. Hash chain", check_hash_chain):
-            return _finish(checks)
+            return _finish(checks, gate_a_lines)
         run_one("9. pytest/ruff/mypy/web", check_suites)
     finally:
         _stop_api_if_we_started_it()
 
-    return _finish(checks)
+    return _finish(checks, gate_a_lines)
 
 
-def _finish(checks: list[CheckResult]) -> int:
+def _finish(checks: list[CheckResult], gate_a_lines: list[str] | None = None) -> int:
     report_lines = [
         f"# Smoke test -- {datetime.now(UTC).date().isoformat()}",
         "",
@@ -1056,6 +1150,8 @@ def _finish(checks: list[CheckResult]) -> int:
     ]
     for c in checks:
         report_lines.append(f"| | {c.name} | {'PASS' if c.passed else 'FAIL'} | {c.reason} |")
+    if gate_a_lines:
+        report_lines += gate_a_lines
     failed = [c for c in checks if not c.passed]
     if failed:
         report_lines += [

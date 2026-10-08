@@ -232,6 +232,52 @@ def test_close_stale_incidents_resolves_through_the_state_machine_and_audit_logs
             )
 
 
+def _gate_a_timings(**overrides: float | None) -> dict[str, float | None]:
+    base: dict[str, float | None] = {
+        "fault_to_detection": 1.0,
+        "fault_to_incident": 2.0,
+        "fault_to_decision": 3.0,
+        "fault_to_action_succeeded": 4.0,
+        "fault_to_incident_resolved": 5.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_render_gate_a_passes_under_the_limit() -> None:
+    lines = smoke.render_gate_a(_gate_a_timings(fault_to_action_succeeded=45.0))
+    joined = "\n".join(lines)
+    assert "Gate A: PASS" in joined
+    assert "45.00s" in joined
+
+
+def test_render_gate_a_fails_at_or_over_the_limit() -> None:
+    lines = smoke.render_gate_a(_gate_a_timings(fault_to_action_succeeded=75.0))
+    joined = "\n".join(lines)
+    assert "Gate A: FAIL" in joined
+    assert "75.00s" in joined
+
+
+def test_render_gate_a_fails_when_action_never_recorded() -> None:
+    lines = smoke.render_gate_a(_gate_a_timings(fault_to_action_succeeded=None))
+    joined = "\n".join(lines)
+    assert "Gate A: FAIL" in joined
+    assert "N/A" in joined
+
+
+def test_render_gate_a_lists_all_five_timings() -> None:
+    lines = smoke.render_gate_a(_gate_a_timings())
+    joined = "\n".join(lines)
+    for label in (
+        "fault-to-detection",
+        "fault-to-incident",
+        "fault-to-decision",
+        "fault-to-action-succeeded",
+        "fault-to-incident-resolved",
+    ):
+        assert label in joined
+
+
 def test_wait_for_detector_warm_up_returns_true_once_fitted() -> None:
     clock = _FakeClock()
     calls = {"n": 0}
