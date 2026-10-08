@@ -220,6 +220,25 @@ def test_wait_for_detector_warm_up_prints_progress_on_a_fixed_interval(
     assert "sim-web-1" in progress_lines[0]
 
 
+def test_pytest_ruff_mypy_are_invoked_via_sys_executable_not_bare_name() -> None:
+    """Windows-specific: a bare "pytest"/"ruff"/"mypy" argv[0] is not
+    guaranteed to resolve to the tool installed for the interpreter this
+    script (and its own test run) is running under -- `sys.executable -m
+    <tool>` is. npm is deliberately exempt (see smoke._suite_steps's
+    docstring); this test only constrains the three Python tools."""
+    steps = {label: cmd for label, cmd, _ in smoke._suite_steps()}
+
+    assert steps["pytest"][:2] == [sys.executable, "-m"]
+    assert steps["ruff check"][:2] == [sys.executable, "-m"]
+    assert steps["mypy"][:2] == [sys.executable, "-m"]
+    assert "pytest" in steps["pytest"]
+    assert "ruff" in steps["ruff check"]
+    assert "mypy" in steps["mypy"]
+    # Bare-name argv[0] would be exactly this -- guard the regression directly.
+    for label in ("pytest", "ruff check", "mypy"):
+        assert steps[label][0] == sys.executable
+
+
 def test_every_kind_is_internally_consistent_with_the_applicability_map() -> None:
     """Sanity check on the fixtures above, not the function under test: a
     structurally correct window for every resource kind in the schema must

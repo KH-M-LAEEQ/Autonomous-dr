@@ -850,8 +850,22 @@ def _summary_line(output: str) -> str:
     return lines[-1].strip() if lines else "(no output)"
 
 
-def check_suites() -> CheckResult:
-    steps: list[tuple[str, list[str], Path]] = [
+def _suite_steps() -> list[tuple[str, list[str], Path]]:
+    """The commands check_suites runs, in order. Split out from
+    check_suites so a test can assert how each command is built without
+    actually running pytest/ruff/mypy recursively.
+
+    pytest/ruff/mypy are invoked as `[sys.executable, "-m", <tool>, ...]`,
+    never by the tool's bare name: on Windows, `subprocess.run` without
+    `shell=True` resolves argv[0] itself rather than going through a shell
+    that would apply PATHEXT, and a bare "pytest"/"ruff"/"mypy" is not
+    guaranteed to resolve the same way `sys.executable -m <tool>` does when
+    several Python installs are on PATH -- `-m` guarantees the tool that
+    runs is the one installed for THIS interpreter, the one the rest of
+    this script (and its own test run) is already running under. `npm` is
+    a different case -- see `_run`'s docstring on why it goes through
+    `shutil.which` instead."""
+    return [
         ("pytest", [sys.executable, "-m", "pytest", "-q"], ROOT),
         ("ruff check", [sys.executable, "-m", "ruff", "check", "."], ROOT),
         ("mypy", [sys.executable, "-m", "mypy"], ROOT),
@@ -859,6 +873,10 @@ def check_suites() -> CheckResult:
         ("web test", ["npm", "test"], ROOT / "web"),
         ("web build", ["npm", "run", "build"], ROOT / "web"),
     ]
+
+
+def check_suites() -> CheckResult:
+    steps = _suite_steps()
     counts: list[str] = []
     for label, cmd, cwd in steps:
         print(f"    running {label}...", flush=True)
