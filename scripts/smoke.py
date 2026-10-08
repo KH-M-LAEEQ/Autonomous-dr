@@ -17,8 +17,15 @@ it does and why):
      in for a signal that does not apply).
   5. Wait (up to 7 minutes, polling /ready's detector_fitted field) for
      sim-web-1's detector to warm up, THEN inject a fault through the API;
-     within 60s of that a detection and an incident row exist. The 60s
-     clock starts after warm-up, not before.
+     within FAULT_TO_INCIDENT_WAIT_SECONDS of that a detection and an
+     incident row (opened at or after T0) exist. That clock starts after
+     warm-up, not before. 180s, not 60s: ml.tasks.LOOKBACK_SECONDS=120
+     means a detection window right after injection is mostly pre-fault
+     history, so 3 consecutive breaches can legitimately take close to
+     120s plus a few more 10s ticks to confirm (measured: ~145s on a real
+     run) -- a 60s budget here was never actually validated against real
+     same-run detection latency until check 5 started rejecting stale
+     incidents (see this file's own git history).
   6. run_incident on that incident: a decision with all four terms
      (weights sum to 1, the stored utility equals re-scoring the stored
      terms), a cost_estimates row written before the action row's status
@@ -540,7 +547,14 @@ def _latest_detection_at_or_after(resource_id: str, t0: datetime) -> datetime | 
     return row.t if row is not None else None
 
 
-def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
+#: Not 60s: ml.tasks.LOOKBACK_SECONDS=120 means the window right after
+#: injection is mostly pre-fault history -- see this function's docstring
+#: header comment (module docstring, check 5) for the measured latency
+#: that led to this number.
+FAULT_TO_INCIDENT_WAIT_SECONDS = 180
+
+
+def check_fault_to_detection(wait_seconds: int = FAULT_TO_INCIDENT_WAIT_SECONDS) -> CheckResult:
     from core.incidents import find_open_incident, get_incident
 
     print(
@@ -579,7 +593,7 @@ def check_fault_to_detection(wait_seconds: int = 60) -> CheckResult:
             look_at="api/routers/actions.py inject_fault",
         )
 
-    # The 60s fault-to-incident limit starts here, AFTER warm-up -- the
+    # The fault-to-incident limit starts here, AFTER warm-up -- the
     # detector is already fitted by this point, so it is a real latency
     # budget, not a disguised bootstrap wait. Only an incident OPENED AT OR
     # AFTER t0 counts -- find_open_incident alone can't tell "caused by
@@ -1104,7 +1118,7 @@ def main() -> int:
             return _finish(checks)
         if not run_one("4. Collector", lambda: check_collector(120)):
             return _finish(checks)
-        fault_result = check_fault_to_detection(60)
+        fault_result = check_fault_to_detection(FAULT_TO_INCIDENT_WAIT_SECONDS)
         checks.append(fault_result)
         print("-> 5. Fault -> detection -> incident")
         print(f"   {'PASS' if fault_result.passed else 'FAIL'}: {fault_result.reason}")
