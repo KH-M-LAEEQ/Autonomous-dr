@@ -98,6 +98,34 @@ def open_incident(
     return UUID(str(row[0]))
 
 
+_CLAIM = text(
+    """
+    UPDATE incidents SET state = 'deciding'
+    WHERE id = :incident_id AND state = 'open'
+    RETURNING id
+    """
+)
+
+
+def claim_incident(incident_id: UUID) -> bool:
+    """Atomically moves OPEN -> DECIDING, returning whether THIS caller won
+    the race. The `state = 'open'` in the WHERE clause is the actual lock:
+    unlike `transition` below, this UPDATE's effect depends on the row's
+    current state, not just the caller's belief about it, so two concurrent
+    callers (a retried task delivery, a duplicate enqueue) can both issue
+    this statement and only one will affect a row.
+
+    Used by `core.incident_tasks.process_incident` to guarantee an incident
+    is driven through `run_incident` exactly once; `run_incident` itself
+    still does its own unconditional `transition(id, OPEN, DECIDING)` right
+    after, which is a harmless no-op re-write once this has already claimed
+    the row.
+    """
+    with session_scope() as session:
+        row = session.execute(_CLAIM, {"incident_id": str(incident_id)}).first()
+    return row is not None
+
+
 def transition(incident_id: UUID, current: IncidentState, new: IncidentState) -> None:
     """Validates against `VALID_TRANSITIONS` before writing. `current` is
     supplied by the caller rather than re-read here, so the caller's own

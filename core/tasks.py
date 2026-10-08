@@ -18,7 +18,7 @@ app = Celery(
     "autonomousdr",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["core.tasks", "ml.tasks"],
+    include=["core.tasks", "core.incident_tasks", "ml.tasks"],
 )
 app.conf.update(
     task_serializer="json",

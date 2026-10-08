@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 
 from core import influx
 from core.detector_state import mark_fitted
+from core.incident_tasks import process_incident
 from core.incidents import find_open_incident, open_incident
 from core.interfaces.anomaly_detector import AnomalyDetector
 from core.logging import get_logger
@@ -97,6 +98,11 @@ async def _check_resource(resource_id: str, tenant_id: str) -> None:
             payload={"incident_id": str(incident_id), "resource_id": resource_id},
             tenant_id=tenant_id,
         )
+        # Autonomous from here: core.incident_tasks.process_incident runs
+        # run_incident for this incident without anything else calling it.
+        # Exactly-once is enforced there (claim_incident), not here -- this
+        # is a fire-and-forget enqueue, not a guarantee of delivery.
+        process_incident.delay(str(incident_id), tenant_id)
 
 
 async def _run() -> int:
