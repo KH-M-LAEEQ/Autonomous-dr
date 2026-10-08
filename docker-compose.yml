@@ -72,7 +72,17 @@ services:
       context: .
       dockerfile: infra/docker/python.Dockerfile
     container_name: adr-worker
-    command: celery -A core.tasks.app worker --loglevel=INFO
+    # --concurrency=1: STOPGAP, not the final design (see docs/notes/
+    # worker-concurrency-stopgap.md). ml/tasks.py keeps detector bootstrap
+    # history and fitted state in process memory (_history, _fitted
+    # module-level dicts) -- Celery's prefork pool defaults to one process
+    # per CPU, and detect_anomalies ticks land on whichever process is
+    # free, so that state fragments across however many processes the
+    # host has. The 30-window bootstrap then only completes by luck (one
+    # process getting ~30 consecutive ticks), not reliably. One process
+    # makes it deterministic; the real fix is making detection state
+    # external to the process (see the note).
+    command: celery -A core.tasks.app worker --loglevel=INFO --concurrency=1
     env_file: [.env]
     environment:
       POSTGRES_HOST: postgres
