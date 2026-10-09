@@ -114,16 +114,22 @@ class CostEstimate(Base):
 
 
 class Decision(Base):
-    """Output of the utility function U(c, l, m). `utility` is the ranked score."""
+    """Output of the utility function. `utility` is the ranked score.
+
+    `terms` is a dict, not fixed fields, because the formula gains keys over the
+    build (cost/latency/safety in W5, impact W13, price_delta W21, risk W22; see
+    docs/formulas.md section 1.1). A key that has not landed yet is ABSENT, never
+    zero-filled: an absent term and a zero-weighted term mean different things once
+    `formula_version` history matters.
+    """
 
     id: UUID = Field(default_factory=uuid4)
     incident_id: UUID
     chosen_action: Action | None
     utility: float
-    cost_term: float
-    latency_term: float
-    impact_term: float
+    terms: dict[str, float]
     weights: dict[str, float]
+    formula_version: str
     rejected: list[dict[str, Any]] = Field(default_factory=list)
     rationale: str | None = None
 
@@ -143,6 +149,9 @@ class Vote(Base):
     proposal_id: UUID
     voter_id: str
     choice: VoteChoice
+    # The Detection this vote was based on. Under heterogeneous detectors (ADR-0012)
+    # a vote is only explainable if you can see which detector produced it.
+    detection_id: UUID | None = None
     reason: str | None = None
     cast_at: datetime
 

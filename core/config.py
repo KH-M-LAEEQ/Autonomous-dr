@@ -39,8 +39,20 @@ class Settings(BaseSettings):
     executor: Literal["simulated", "aws", "azure", "gcp", "terraform"] = "simulated"
     explainer: Literal["template", "llm"] = "template"
 
+    # Monitor node identity (Week 17). Each node runs a DIFFERENT detector; they all
+    # read the same telemetry, so independence is in the scoring method (ADR-0012).
+    node_id: str = "node-a"
+    node_detector: Literal["threshold", "iforest", "lstm", "gnn"] = "threshold"
+
     # Budget gate (Week 5)
     default_monthly_budget_usd: float = 25.0
+
+    # Risk weight in the utility function (Week 22, ADR-0010). The score itself
+    # updates autonomously; only the bound on its weight is a human-set policy.
+    # Tenants may override at onboarding, same mechanism as the budget cap.
+    w_risk_default: float = 0.10
+    w_risk_min: float = 0.0
+    w_risk_max: float = 0.30
 
     # Cloud credentials -- empty until Week 7
     aws_access_key_id: str = ""

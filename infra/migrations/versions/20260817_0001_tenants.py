@@ -1,7 +1,7 @@
 """Initial migration: extensions and tenants.
 
-Deliberately small. The full 15-table schema is the Week 2 deliverable and gets
-written as revision 0002 in one hand-authored migration — including the tables
+Deliberately small. The remaining 15 of the 16 tables are the Week 2 deliverable
+and live in revision 0002, hand-authored in one migration — including the tables
 that stay empty until month four.
 
 This revision exists so that `make migrate` has something to do on a clean clone,

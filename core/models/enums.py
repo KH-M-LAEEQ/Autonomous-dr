@@ -66,6 +66,18 @@ class VoteChoice(StrEnum):
     ABSTAIN = "abstain"
 
 
+class RiskSourceType(StrEnum):
+    """Provenance of a risk signal (ADR-0010).
+
+    PROVIDER_STATUS feeds the utility function autonomously. GEOPOLITICAL is
+    computed and displayed continuously, but how much it weighs is bounded by
+    tenant policy (w_risk_min / w_risk_max in config).
+    """
+
+    PROVIDER_STATUS = "provider_status"
+    GEOPOLITICAL = "geopolitical"
+
+
 class DetectorName(StrEnum):
     """Every detector ever benchmarked appears here so the results table can key off it."""
 
