@@ -526,14 +526,10 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
 
                 shape = shape_schedule[episode]
                 target = rng.choice(resources)
-                run = _phase_runner(
-                    provider, resources, clock, history, windows_out, args
-                )
+                run = _phase_runner(provider, resources, clock, history, windows_out, args)
 
                 if shape == "intermittent":
-                    bursts, written = await _run_intermittent(
-                        provider, target, run, args
-                    )
+                    bursts, written = await _run_intermittent(provider, target, run, args)
                     window_count += written
                     spans = bursts
                     fault_type = "cpu_hog"  # the primitive each burst injects
@@ -613,6 +609,11 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
     return {
         "version": args.version,
         "seed": args.seed,
+        # Absent on v1-v5's manifests -- they predate this field and are not
+        # retroactively relabelled. Present from here on, so a later reader
+        # can tell which simulator behaviour (core/providers/simulated.py)
+        # produced this dataset's telemetry.
+        "simulator_version": simulated_module.SIMULATOR_VERSION,
         "metric_list_version": _metric_list_version(),
         "created": datetime.now(UTC).date().isoformat(),
         # `episode_count` is label rows, which is what the harness scores.
@@ -622,9 +623,7 @@ async def generate(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
         "scheduled_episode_count": args.episodes,
         "window_count": window_count,
         "shapes_used": sorted(args.shapes),
-        "shape_distribution": dict(
-            sorted(Counter(str(row["shape"]) for row in labels).items())
-        ),
+        "shape_distribution": dict(sorted(Counter(str(row["shape"]) for row in labels).items())),
         "shape_schedule": {
             "ramp_minutes": args.ramp_minutes,
             "small_step_seconds": args.small_step_seconds,
@@ -684,9 +683,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="episode shapes to draw from (default: all)",
     )
     parser.add_argument("--ramp-minutes", type=float, default=10.0, help="gradual_ramp duration")
-    parser.add_argument(
-        "--small-step-seconds", type=int, default=300, help="small_step duration"
-    )
+    parser.add_argument("--small-step-seconds", type=int, default=300, help="small_step duration")
     parser.add_argument("--intermittent-on", type=float, default=1.0, help="minutes on")
     parser.add_argument("--intermittent-off", type=float, default=1.0, help="minutes off")
     parser.add_argument(
