@@ -21,3 +21,8 @@ def build(name: str, **kwargs: object) -> AnomalyDetector:
     if name not in REGISTRY:
         raise KeyError(f"unknown detector {name!r}; registered: {sorted(REGISTRY)}")
     return REGISTRY[name](**kwargs)  # type: ignore[call-arg, arg-type]
+
+
+# Imported for its @register("threshold") side effect, after REGISTRY/register
+# exist above -- threshold.py imports `register` back from this module.
+from ml.detectors import threshold  # noqa: E402, F401
