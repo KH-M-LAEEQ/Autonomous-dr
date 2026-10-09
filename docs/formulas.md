@@ -1,121 +1,266 @@
-# Formulas — the single source of truth
+# formulas.md
 
-Week 1, AI role. Every formula the system implements is transcribed here **from the
-paper, with the citation**, before any code uses it. Week 5 implements `U(c, l, m)`
-against this file and unit-tests it on the paper's own worked values — that test is
-the correctness proof, and it only works if the numbers below are the real ones.
+## §1 Utility function
 
-Rules:
+**Source:** Li et al., *J. Cyber Security and Mobility*, 14(5), pp. 1173–1198, 2025.
+doi: 10.13052/jcsm2245-1439.1456
 
-- Nothing here is written from memory. Open the PDF, copy the equation, note the
-  equation number and page.
-- If the paper is ambiguous, record the ambiguity and your chosen reading. Do not
-  quietly pick one.
-- If the implementation diverges from the paper, say so here and say why. A
-  documented deviation is a design decision; an undocumented one is an error.
-
-## Sources
-
-| Key | Citation (fill in full, exactly as it will appear in the thesis) | Used for |
-| --- | --- | --- |
-| `li_utility` | Li et al., Eq. 7, p. 1183 | Utility function (extended, see ADR-0011) |
-| `liu_consensus` | TODO — Liu et al. | Consensus / voting model |
-| `karami_anomaly` | TODO — Karami et al. | Anomaly scoring |
-
-## 1. Utility function — `li_utility` (Li et al., Eq. 7, p. 1183)
-
-As published (scores candidate **nodes**):
+### As published (Eq. 7, p. 1183)
 
 ```
-U(cl_m) = w_ability * Phi_m - w_cost * C_failover(cl_m)
+U(cl_m) = w_ability · Φ_m − w_cost · C_failover(cl_m)
+cl_opt  = arg max U(cl_m)                              (Eq. 8)
 ```
 
-Ours (scores candidate **actions**; contract in ADR-0011, code in
-`core/decision/utility.py`):
+Two terms. Scores candidate **nodes**.
+
+### Capability score (Eq. 3–4, p. 1180)
 
 ```
-U = sum over present terms of  sign * weight * term
-
-  + w_ability * ability        Phi: capability of the action's target. 1.0 until W3 data.
-  - w_cost    * cost
-  - w_latency * latency
-  + w_safety  * safety         reversibility
-  - w_impact  * impact         (W13)
-  - w_price   * price_delta    (W21)
-  - w_risk    * risk           (W22)
+w_j = E(θ_j) / Σ E(θ'_j)          weights, sum to 1
+Φ_m = Σ w_j · nor(x_{m,j})        capability of node cl_m
 ```
 
-| Term | Meaning | Normalised against | Range | Ships |
-| --- | --- | --- | --- | --- |
-| `ability` | capability of the action's target (Li Phi) | already 0-1 | [0, 1] | W5 (stub 1.0) |
-| `cost` | action cost | tenant budget cap | [0, 1] | W5 |
-| `latency` | expected recovery time | 60 s target | [0, 1] | W5 |
-| `safety` | reversibility of the action | tier table | [0, 1] | W5 |
-| `impact` | blast radius | dependency graph | [0, 1] | W13 |
-| `price_delta` | cross-cloud price gap | provider prices | [0, 1] | W21 |
-| `risk` | region risk | risk score | [0, 1] | W22 |
+`x_{m,j}` = historical performance of node `m` on metric `j`. Comes from the Week 3
+collector. Until it has data, stub `Φ = 1.0`.
 
-**Rules:** every term is normalised to [0, 1] before weighting; signs live in a
-registry (ability and safety add, the rest subtract); weights are non-negative and sum
-to 1 over the present terms, so U is in [-1, 1]; an absent term is not a zero term and
-a new term means a new `formula_version`; a `Decision` is only valid if `terms` and
-`weights` have the same keys, `ability` is present and `utility` equals the formula.
-
-**Hardcoded Week 5 weights:** ability 0.20, cost 0.25, latency 0.25, safety 0.30.
-Week 25's bandit moves them inside per-tenant bounds and keeps the sum at 1.
-
-**Worked values from the paper** (the Week 5 unit test asserts these exactly):
-
-| Case | Expected `U` | Paper reference |
-| --- | --- | --- |
-| TODO: transcribe from Li et al. | | Table ?, p. ? |
-
-Our own worked example (`core/tests/test_utility.py`): ability 1.0, cost 0.2,
-latency 0.1, safety 0.9 with the weights above gives U = 0.395.
-
-## 2. Anomaly score — `karami_anomaly`
+### Ours (contract fixed in ADR-0011, code in `core/decision/utility.py`)
 
 ```
-TODO
+U = Σ sign_k · w_k · term_k        over the terms that are present
+
+  + w_ability · ability            Φ, capability of the action's target. 1.0 until W3 data.
+  − w_cost    · cost
+  − w_latency · latency
+  + w_safety  · safety
+  − w_impact  · impact             (W13)
+  − w_price   · price_delta        (W21)
+  − w_risk    · risk               (W22)
 ```
 
-Threshold rule (Week 4 baseline, never deleted): 3 consecutive breaches → detection.
-Record the exact breach definition here, because every later detector is measured
-against it.
+Scores candidate **actions**, not nodes. Li scores nodes, so for an action `ability` is
+the capability of the node or region the action moves traffic to. Implemented as a
+terms dict so keys can be added without touching the code that consumes it.
 
-### Threshold strategies (Week 10 comparison, ADR-0009)
+**Rules (the formula contract):**
 
-`ThresholdStrategy` implementations (`core/threshold_strategies.py`), each fit on
-training residuals only:
+1. **`ability` is a term.** It is stored in `Decision.terms` like the others and is the
+   only required one. It is Φ. Before Week 3 history exists it is 1.0 for every option,
+   which leaves the ranking unchanged but keeps the term in the record.
+2. **Every term is normalised to [0, 1] before weighting.** Stored terms always mean
+   "how much of this thing". Raw dollars and seconds live in `cost_estimates` and the
+   action record, not in `terms`.
+3. **Signs live in a registry, not in the numbers.** `ability` and `safety` add (safety
+   is reversibility). Everything else subtracts.
+4. **Weights are non-negative and sum to 1** over the terms that are present, so U is
+   always in [−1, 1] and scores from different formula versions are comparable. When a
+   later week adds a term, `add_term` scales the existing weights so the sum stays 1.
+5. **A `Decision` is only valid if** `terms` and `weights` have the same keys, `ability`
+   is present, and `utility` equals the formula result. A saved decision can always be
+   re-scored from its own record.
 
-| Strategy | Rule | Notes |
-| --- | --- | --- |
-| Z-test | flag if `\|residual - μ\| > 3σ` | μ, σ from training residuals |
-| Gaussian likelihood | flag if `N(residual; μ, σ) < cutoff` (default `1e-3`) | same μ, σ as Z-test |
-| Percentile | flag if `residual > P95(train_residuals)` | q configurable, default 95 |
-| IQR (Tukey) | flag if `residual > Q3 + 1.5 × (Q3 − Q1)` | **default** — lowest observed false-positive rate of the four in the Week 10 harness run |
+---
 
-TODO (Week 10, AI role): fill in the actual false-positive-rate numbers from
-the harness run once it exists; the "lowest FPR" claim above is the design
-rationale, the table here should be the proof.
+## §1.1 The terms
 
-## 3. Consensus — `liu_consensus`
+### Week 5 — implement these four now
 
-Quorum: TODO — state the rule as a formula, not prose (`approvals ≥ ⌈(n+1)/2⌉` with
-`n = 3`, timeout `T` seconds, and what happens on timeout).
+| Term | What it is | Why it's here | Source |
+|---|---|---|---|
+| `ability` | capability of the action's target node, 0–1 (Li's Φ) | The paper's own term. Without it the formula is not an extension of Li, and a decision can't be re-scored from its record. Stub 1.0 until the collector has history. | W3 collector, entropy weights over the Φ subset in `metric-schema.md` |
+| `cost` | dollar cost of the action, normalised against the tenant's budget cap | Li's `C_failover`. Without it the system picks the most expensive recovery every time. Also feeds the budget gate. | `PricingSource` — static table W5, live APIs W12 |
+| `latency` | expected recovery time, normalised against the 60 s target | Our 60-second target is a hard requirement. A cheap action that takes 20 minutes fails the objective. Li has no time term. | measured per action type |
+| `safety` | reversibility, 0–1 | **This is the novel term.** A DNS weight shift is undoable in seconds; a DR promotion is not. Without it the system treats "reroute traffic" and "promote the standby region" as interchangeable if the cost matches. | static per action tier |
 
-PBFT (Week 24): safety bound `n ≥ 3f + 1`, so `f = 1` with `n = 4`. Note here what
-that means for a 3-node deployment before Week 24 assumes otherwise.
+### Week 13 — after the dependency graph exists
 
-## 4. Savings model (Week 23)
+| Term | What it is | Why it's here | Source |
+|---|---|---|---|
+| `impact` | blast radius, 0–1 | An action that fixes one service but takes down four downstream is a net loss. Can't be computed until we have the service graph. | NetworkX reachability over `graph_nodes` / `graph_edges` |
+
+### Week 21 — after the third provider is live
+
+| Term | What it is | Why it's here | Source |
+|---|---|---|---|
+| `price_delta` | cost gap between providers | Backs the "cost-aware multi-cloud" claim. Meaningless with one provider — needs at least two live to compare. | AWS Price List + Azure Retail + GCP Billing APIs |
+
+### Week 22 — after the risk feed exists
+
+| Term | What it is | Why it's here | Source |
+|---|---|---|---|
+| `risk` | region risk, 0–1 | Stops the system failing over *into* a degrading region. Provider-status risk is autonomous; `w_risk` is bounded per tenant (ADR-0010). | `risk_signals` table, §5 |
+
+### Why all seven are in the file when only four ship this week
+
+`Decision.terms` is a dict from Week 2. If it were fixed float fields, adding
+`impact` in November means a schema migration, a model change, and re-running every
+result generated before it. Writing the full key set down now costs nothing and means
+Weeks 13 / 21 / 22 are one-line additions.
+
+Absent key ≠ zero-weighted key. Don't zero-fill terms that haven't landed —
+`formula_version` history depends on telling those apart. A new term means a new
+`formula_version`, with the old weights scaled so the set still sums to 1.
+
+---
+
+## §1.2 Things the paper leaves to us
+
+- **No weight values given.** We pick them. Hardcoded W5 (ability 0.20, cost 0.25,
+  latency 0.25, safety 0.30), learned by the bandit W25.
+- **Normalise every term to [0,1] before weighting.** `Φ` is 0–1, cost is currency —
+  subtract them raw and cost swamps everything.
+- **`w_j` is derived from data (Eq. 3). The outer weights are tuned.** Week 25's
+  bandit touches only the outer ones, stays inside the per-tenant bounds, and keeps
+  the weights summing to 1.
+
+---
+
+## §2 Detection metrics
+
+**Source:** Karami, Jalali & Ghassemi, arXiv:2510.11141, Oct 2025.
+(arXiv preprint — not IEEE Access. Fix the reference list.)
+
+Week 10's harness uses these definitions and never changes them. Every result in the
+thesis inherits them, so a redefinition in March invalidates everything before it.
+
+### From the paper (Eqs. 21–23)
 
 ```
-savings = downtime_cost_avoided - action_cost - system_overhead
+Precision = TP / (TP + FP)
+Recall    = TP / (TP + FN)
+F1        = 2 · Precision · Recall / (Precision + Recall)
+FPR       = FP / (FP + TN)
 ```
 
-Every term needs a stated assumption and a source. A defensible number beats an
-impressive one — this table is what a committee will attack.
+Point-wise, computed against per-timestamp ground-truth labels.
 
-| Term | How it is computed | Assumption | Source |
-| --- | --- | --- | --- |
-| `downtime_cost_avoided` | TODO | TODO | TODO |
+### Detection delay — ours
+
+**The paper has no timing metric.** It reports Precision, Recall, F1, Accuracy, AUC and
+FPR only. So we define delay ourselves:
+
+```
+delay = t_first_detection − t_fault_injected      (seconds)
+```
+
+Measured per episode. Week 8's injector writes exact fault start/end to
+`labels.jsonl`, so ground truth is exact. Report the distribution (p50 / p95 / p99),
+not the mean. Undetected faults are excluded from the delay distribution and counted
+separately as misses — averaging them in as zero or infinity both lie.
+
+### Threshold method — use IQR, not Z-test
+
+Their Table V, on LSTM residuals:
+
+| Method | F1 | FPR |
+|---|---|---|
+| Z-test (3σ) | 0.688 | 0.215 |
+| Gaussian likelihood | 0.688 | 0.215 |
+| Percentile (q95) | 0.652 | 0.238 |
+| **IQR (Tukey 1.5×)** | 0.621 | **0.189** |
+
+IQR gives the lowest false-positive rate for a small F1 cost. Our proposal commits to
+near-zero false actions, so that's the right trade. Z-test stays available via config
+for the comparison table.
+
+```
+IQR rule:  anomaly if  r < Q1 − 1.5·IQR  or  r > Q3 + 1.5·IQR
+```
+
+Quartiles fit on **training** residuals only.
+
+### Split — 70 / 15 / 15
+
+Train 70%, validation 15%, test 15%. Strictly temporal, never shuffled. The val set is
+what early stopping monitors; a 70/30 split has nowhere to stop from. `μ` and `σ` for
+normalisation come from training data only.
+
+### Residual detection (Week 11 LSTM)
+
+```
+r_j = x_j − x̂_j
+```
+
+Their LSTM config, which our Week 11 spec should match: 2 layers, 64 hidden units,
+dropout 0.2, window 50, Adam @ 1e-3, batch 32, gradient clip 1.0, early stopping
+patience 5. Converges in 10–20 epochs.
+
+> **Don't use their F1 numbers as a baseline to beat.** Reported precision (0.688)
+> isn't consistent with reported FPR (0.215) under the class imbalance they describe.
+> Our baseline is the Week 4 threshold detector on our own data.
+
+---
+
+## §3 Consensus
+
+**Source:** Liu et al., *Scientific Reports*, 13:13030, 2023.
+doi: 10.1038/s41598-023-28856-x
+
+Cite this for PBFT mechanics only. The paper is about consortium blockchain
+throughput — it says nothing about monitors, anomaly detection, or false positives.
+The three-heterogeneous-detector design in Week 17 is ours.
+
+### Node count
+
+```
+n ≥ 3f + 1        →  f = 1 needs n = 4, not 3
+```
+
+Quorum default: n = 3. PBFT: n = 4. Assert it at construction.
+
+### Phase thresholds
+
+| Phase | Votes needed | At n=4, f=1 |
+|---|---|---|
+| Prepare | `2f + 1` | 3 |
+| Commit | `2f + 1` | 3 |
+| Client reply | `f + 1` | 2 |
+
+> **The paper is wrong here.** Liu et al. (p. 3) state the prepare phase requires
+> `3f + 1` messages. It's `2f + 1`. Using `3f + 1` at n=4 means all four nodes must
+> respond, so a single node death stalls consensus — which fails Week 17's "a killed
+> node doesn't stop legitimate recovery." Their commit (`2f+1`) and reply (`f+1`)
+> numbers are correct.
+
+### Do not implement CBFT
+
+CBFT is the paper's own contribution — node grouping plus credit scoring. Built for
+50–600 nodes; their Fig. 5 shows it is *slower* than plain PBFT below ~28 nodes
+because grouping overhead dominates. We run 4. Implement plain PBFT
+(Castro & Liskov).
+
+Also: the paper claims CBFT tolerates up to 1/2 Byzantine nodes in some groups. That
+exceeds the classical BFT bound. Don't repeat the claim.
+
+### Message overhead — W24 benchmark
+
+```
+T_PBFT = 2N(N − 1)        # N=4  →  24 messages/round
+T_quorum ≈ 2(N − 1)       # N=3  →   4 messages/round
+```
+
+Latency, same source:
+
+```
+T_d = T_c − T_r           # confirmation time − generation time
+```
+
+This is the quorum-vs-PBFT trade-off table for Week 24.
+
+---
+
+## §4 Savings model
+
+TODO — W23.
+
+---
+
+## §5 Risk score
+
+```
+risk_score = clamp(a₁·incident_density + a₂·advisory_severity + a₃·geopolitical_flag, 0, 1)
+```
+
+green `< 0.33` · orange `0.33–0.66` · red `≥ 0.66`
+
+Feeds `terms["risk"]` above.

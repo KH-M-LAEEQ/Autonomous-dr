@@ -1,0 +1,53 @@
+{
+  "version": "v1",
+  "seed": 42,
+  "metric_list_version": {
+    "source": "core.signals.CANONICAL_SIGNALS",
+    "count": 20,
+    "sha256": "51ba8da8a0e71f98"
+  },
+  "created": "2026-10-06",
+  "episode_count": 20,
+  "window_count": 13448,
+  "generator": "ml/datasets/make_episodes.py",
+  "generator_commit": "7d9e2db36ca051fc2435e014e39c96063101d8a1",
+  "fault_store": "memory",
+  "virtual_clock": {
+    "start": "2026-01-01T00:00:00+00:00",
+    "end": "2026-01-01T04:42:00+00:00",
+    "step_seconds": 10
+  },
+  "window_samples": 12,
+  "schedule": {
+    "normal_minutes": 10.0,
+    "fault_seconds_min": 60,
+    "fault_seconds_max": 180,
+    "recover_minutes": 2.0
+  },
+  "fault_type_distribution": {
+    "cpu_hog": 5,
+    "latency": 4,
+    "pause": 4,
+    "region_down": 4,
+    "stop": 3
+  },
+  "resources": [
+    "sim-cache-1",
+    "sim-db-1",
+    "sim-db-2",
+    "sim-lb-1",
+    "sim-web-1",
+    "sim-web-2",
+    "sim-web-3",
+    "sim-worker-1"
+  ],
+  "notes": [
+    "OLD SIGNAL NAMES -- practice only. Generated before docs/metric-schema.md was adopted as the single metric list: this dataset uses the retired docs/notes/old-metrics.md names and units (cpu_pct, error_rate_pct as a percentage, uptime_pct, ...). Not comparable with v4+ and not regenerable by the current make_episodes.py. Kept for provenance; do not delete.",
+    "Simulator data. Practice only -- not thesis material.",
+    "Fault windows are bounded by clear_fault, not by the Redis TTL.",
+    "region_down labels list every affected resource, not just the target.",
+    "Telemetry is reproducible from `seed` alone, given the same metric list."
+  ],
+  "deprecated": true,
+  "signal_schema": "old (pre-metric-schema.md)"
+}
