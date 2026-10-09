@@ -20,4 +20,4 @@ def register(name: str):  # type: ignore[no-untyped-def]
 def build(name: str, **kwargs: object) -> AnomalyDetector:
     if name not in REGISTRY:
         raise KeyError(f"unknown detector {name!r}; registered: {sorted(REGISTRY)}")
-    return REGISTRY[name](**kwargs)  # type: ignore[call-arg]
+    return REGISTRY[name](**kwargs)  # type: ignore[call-arg, arg-type]
