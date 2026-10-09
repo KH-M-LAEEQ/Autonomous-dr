@@ -1,9 +1,12 @@
-"""Actions, plus the demo-critical fault injection endpoint (Week 6)."""
+"""Actions, plus the demo-critical fault injection endpoint."""
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
+from core.config import get_settings
 from core.models.domain import Action
+from core.providers import get_provider
+from core.providers.simulated import SimulatedProvider
 
 router = APIRouter(prefix="/api/v1", tags=["actions"])
 
@@ -24,4 +27,17 @@ async def list_actions(incident_id: str | None = None) -> list[Action]:
 @router.post("/faults", status_code=status.HTTP_202_ACCEPTED)
 async def inject_fault(req: FaultInjectionRequest) -> dict[str, str]:
     """Inject a fault into the simulator. Only ever enabled against SimulatedProvider."""
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Week 3")
+    if "simulated" not in get_settings().enabled_providers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fault injection requires the simulated provider to be enabled",
+        )
+    provider = get_provider("simulated")
+    assert isinstance(provider, SimulatedProvider)
+    try:
+        provider.inject_fault(req.resource_id, req.fault_type, req.duration_seconds)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"resource_id": req.resource_id, "fault_type": req.fault_type, "status": "injected"}
