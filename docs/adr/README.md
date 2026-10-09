@@ -28,3 +28,4 @@ artefact, and the viva committee will ask about the decisions you reversed.
 | [0006](0006-celery-for-async.md) | Celery for asynchronous and scheduled work | Proposed |
 | [0007](0007-simulator-first-testing.md) | Simulator-first development and testing | Proposed |
 | [0008](0008-time-based-evaluation-splits.md) | Time-based evaluation splits, never shuffled | Proposed |
+| [0009](0009-pluggable-thresholds-and-structured-explanations.md) | Pluggable anomaly thresholds and structured, auditable explanations | Proposed |
