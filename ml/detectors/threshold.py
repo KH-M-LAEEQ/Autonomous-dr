@@ -63,7 +63,7 @@ class ThresholdDetector(AnomalyDetector):
         self._consecutive_breaches = 0
         self._last_explain: dict[str, Any] = {}
 
-    def fit(self, X: list[MetricWindow]) -> None:
+    def fit(self, X: list[MetricWindow], X_val: list[MetricWindow] | None = None) -> None:
         """Baseline mean per signal over every training window's full series,
         then the IQR cutoff (`self.decision_threshold`) over the resulting
         training residuals."""
