@@ -30,7 +30,7 @@ make verify               # <- the gate. Everything must pass.
 Then, in two more terminals:
 
 ```bash
-make api                  # http://localhost:8000/docs
+make api                  # http://localhost:8001/docs (API_PORT in .env)
 make web                  # http://localhost:5173
 ```
 
@@ -132,9 +132,10 @@ detector, consensus strategy, executor, explainer and provider set; the frontend
 | `make verify` fails on a port | `make up`, then wait ~15s for health checks |
 | `pgvector extension absent` | `make nuke && make up && make migrate` (deletes local data) |
 | Postgres connects but no tables | `make migrate` |
-| API starts, dashboard shows nothing | Is `make api` running? The dashboard proxies to :8000 |
+| API starts, dashboard shows nothing | Is `make api` running? The dashboard proxies to `API_PORT` (default 8001) |
 | `ModuleNotFoundError: core` | Activate the venv, or run `pip install -e ".[dev]"` |
 | Port 5432 already in use | You have a local Postgres. Stop it, or change `POSTGRES_PORT` in `.env` |
+| Port 8001 already in use | Another project is on it. Change `API_PORT` in `.env` -- don't touch the other project |
 | Pre-commit blocked your commit | Read the message. If it mentions a key, do not `--no-verify` — move it to `.env` |
 | CI red, local green | Compare versions: CI uses Python 3.12 and Node 22 |
 

@@ -31,6 +31,13 @@ async def _poll_resource(provider: CloudProvider, resource: Resource) -> None:
     report = await provider.get_health(resource.id)
     if not report.signals:
         return
+    # `report.signals` carries only the signals this resource actually reports
+    # -- up to all 25 of core/signals.ALL_COLLECTED_SIGNALS, fewer when some do
+    # not apply to its kind. Those are absent rather than 0.0, and passing the
+    # dict through unchanged is what preserves that: InfluxDB has no null, so a
+    # field that is never written reads back as null, which is the intended
+    # meaning. Never fill a gap with 0.0 here -- that would record a
+    # measurement claiming the value really is zero.
     influx.write_metrics(
         measurement=MEASUREMENT,
         tags={

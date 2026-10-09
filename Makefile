@@ -3,6 +3,13 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
+# Pull API_PORT (and anything else) out of .env so this file has no port
+# number of its own to drift out of sync with core/config.py's Settings --
+# `-include` so a clean clone without .env yet still runs `make setup`.
+-include .env
+export
+API_PORT ?= 8001
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "};{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
@@ -31,7 +38,7 @@ nuke: ## Stop containers AND delete all volumes. Destroys your dataset.
 	docker compose down -v
 
 api: ## Run the FastAPI app natively with hot reload
-	./.venv/bin/uvicorn api.main:app --reload --port 8000
+	./.venv/bin/uvicorn api.main:app --reload --port $(API_PORT)
 
 worker: ## Run a Celery worker natively
 	./.venv/bin/celery -A core.tasks.app worker --loglevel=INFO
@@ -49,7 +56,7 @@ hooks: ## Run the pre-commit hooks over the whole repo
 	./.venv/bin/pre-commit run --all-files
 
 openapi: ## Export the frozen API contract for the frontend (API must be running)
-	curl -s localhost:8000/openapi.json | python3 -m json.tool > docs/api/openapi.json
+	curl -s localhost:$(API_PORT)/openapi.json | python3 -m json.tool > docs/api/openapi.json
 	@echo "Wrote docs/api/openapi.json -- commit it with the router change."
 
 migrate: ## Apply all database migrations
@@ -76,5 +83,8 @@ web-build: ## Type-check and build the frontend (same as CI)
 results: ## Regenerate every table and figure in the thesis (Week 31 target)
 	@echo "Not implemented until Week 10 -- ml/harness/evaluate.py owns this."
 
+smoke: ## Walk the product end to end; PASS/FAIL per check, stops at the first failure
+	python3 scripts/smoke.py
+
 .PHONY: help setup verify hooks openapi up up-all down nuke api worker beat web migrate \
-	migration test lint fmt web-build results
+	migration test lint fmt web-build results smoke

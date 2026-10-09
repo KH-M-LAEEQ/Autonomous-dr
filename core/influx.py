@@ -84,6 +84,19 @@ def query_recent_window(resource_id: str, tenant_id: str, lookback_seconds: int)
     for Flux; both always come from our own fixed resource list (see
     core/providers/simulated.py), never from a request body, so the quote
     check below is a belt-and-braces guard, not the actual trust boundary.
+
+    **Every signal's list is sorted by timestamp before being handed back,
+    explicitly, in Python -- not left to table-iteration order.** A plain
+    `from()|>range()|>filter()` with no `group()` returns one Flux TABLE per
+    unique tag combination still present in the range; any tag that changes
+    value on a write (there is no such tag left as of this fix, but nothing
+    stops a future one) would split one resource's points across tables for
+    as long as both straddle the query window, and this client iterates
+    `for table in tables: for record in table.records`, in whatever order
+    the tables come back -- not necessarily chronological across tables.
+    Callers (`ml/detectors/threshold.py`'s `_last_values`, `series[-1]`)
+    trust that the last element really is the latest reading; this is what
+    makes that true regardless of how many tables a query happens to span.
     """
     if '"' in resource_id or '"' in tenant_id:
         raise ValueError("resource_id/tenant_id must not contain a double quote")
@@ -91,23 +104,32 @@ def query_recent_window(resource_id: str, tenant_id: str, lookback_seconds: int)
     s = get_settings()
     now = datetime.now(UTC)
     start = now - timedelta(seconds=lookback_seconds)
+    # health_state is a descriptive string field (core/collector.py), not a
+    # numeric signal -- excluded here rather than forcing it through
+    # `float()` below, since this window only ever feeds a detector.
     query = f"""
     from(bucket: "{s.influx_bucket}")
       |> range(start: {start.isoformat()}, stop: {now.isoformat()})
       |> filter(fn: (r) => r["_measurement"] == "telemetry")
       |> filter(fn: (r) => r["resource_id"] == "{resource_id}")
       |> filter(fn: (r) => r["tenant_id"] == "{tenant_id}")
+      |> filter(fn: (r) => r["_field"] != "health_state")
     """
 
-    values: dict[str, list[float]] = {}
+    timed: dict[str, list[tuple[datetime, float]]] = {}
     try:
         tables = get_client().query_api().query(query, org=s.influx_org)
         for table in tables:
             for record in table.records:
                 signal = str(record.get_field())
-                values.setdefault(signal, []).append(float(record.get_value()))
+                timed.setdefault(signal, []).append((record.get_time(), float(record.get_value())))
     except Exception:
         log.warning("query_recent_window failed for %s; influxdb unreachable", resource_id)
+
+    values: dict[str, list[float]] = {
+        signal: [v for _, v in sorted(points, key=lambda p: p[0])]
+        for signal, points in timed.items()
+    }
 
     return MetricWindow(
         resource_id=resource_id,

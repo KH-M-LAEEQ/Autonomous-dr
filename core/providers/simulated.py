@@ -7,6 +7,21 @@ to the collector running in a different process) overrides specific signals
 for a bounded duration -- that override IS the fault, not a separate failure
 model, so a 24-hour collector run naturally produces labelled anomalies
 whenever the demo fault button is used.
+
+Signal names and units come from `core/signals.py` / `docs/metric-schema.md`.
+Two consequences worth stating because they are easy to get wrong:
+
+**A signal that does not apply to a resource kind is omitted, never zeroed.**
+A worker has no `request_rate`; a cache has no `replication_lag_seconds`. The
+key is absent from `HealthReport.signals`, which is how null travels (see
+`core/signals.py`). Returning 0.0 would be a measurement claiming the value
+really is zero, and a detector would learn that as normal.
+
+**`uptime_seconds` is monotonic between restarts.** It is derived from a
+per-resource boot time, not drawn from a baseline distribution, so it climbs
+with the clock and *drops to zero* when a restart-class fault (`stop`, `pause`,
+`region_down`) hits. The drop is the signal; the ramp carries no information,
+which is why `core/signals.py` keeps it out of detector features.
 """
 
 from __future__ import annotations
@@ -19,12 +34,26 @@ from core import faults
 from core.interfaces.cloud_provider import CloudProvider
 from core.models.domain import Action, CostEstimate, HealthReport, Resource
 from core.models.enums import ActionType, HealthState, ProviderName
-from core.signals import CANONICAL_SIGNALS
+from core.signals import ALL_COLLECTED_SIGNALS
 
 REGIONS: tuple[str, ...] = ("sim-us-east-1", "sim-eu-west-1", "sim-ap-south-1")
 TENANTS: tuple[str, ...] = ("tenant-a", "tenant-b")
 
-FAULT_TYPES: tuple[str, ...] = ("cpu_hog", "latency", "stop", "pause", "region_down")
+FAULT_TYPES: tuple[str, ...] = (
+    "cpu_hog",
+    "latency",
+    "stop",
+    "pause",
+    "region_down",
+    # Added for the Week 10 harness: the three above that pin signals to an
+    # extreme are trivially detectable, which tells you nothing about a
+    # detector. These two are deliberately subtle.
+    "cpu_ramp",  # severity scales with `intensity`, for a gradual climb
+    "cpu_step_small",  # a small fixed bump, well inside normal noise envelopes
+)
+
+#: Faults that mean the resource restarted, so `uptime_seconds` resets.
+_RESTART_FAULTS: frozenset[str] = frozenset({"stop", "pause", "region_down"})
 
 _RESOURCES: tuple[Resource, ...] = (
     Resource(
@@ -105,73 +134,137 @@ _RESOURCE_BY_ID: dict[str, Resource] = {r.id: r for r in _RESOURCES}
 SIMULATOR_VERSION = 3
 
 # (mean, std, ceiling) per signal. `math.inf` ceiling means "no natural cap"
-# (byte/count rates); percentages cap at 100.
+# (byte/count rates); percentages cap at 100 and fractions at 1.
 Baseline = tuple[float, float, float]
 
 _DEFAULT_BASELINE: dict[str, Baseline] = {
-    "cpu_pct": (30.0, 8.0, 100.0),
-    "memory_pct": (40.0, 8.0, 100.0),
-    "disk_used_pct": (55.0, 3.0, 100.0),
-    "disk_read_bytes_per_s": (2_000_000.0, 500_000.0, math.inf),
-    "disk_write_bytes_per_s": (1_000_000.0, 300_000.0, math.inf),
-    "network_in_bytes_per_s": (5_000_000.0, 1_000_000.0, math.inf),
-    "network_out_bytes_per_s": (6_000_000.0, 1_200_000.0, math.inf),
-    "request_rate_per_s": (50.0, 10.0, math.inf),
-    "error_rate_pct": (0.5, 0.3, 100.0),
-    "latency_p50_ms": (40.0, 8.0, math.inf),
-    "latency_p95_ms": (120.0, 20.0, math.inf),
-    "latency_p99_ms": (220.0, 40.0, math.inf),
+    # Compute
+    "cpu_percent": (30.0, 8.0, 100.0),
+    "memory_percent": (40.0, 8.0, 100.0),
+    "disk_used_percent": (55.0, 3.0, 100.0),
+    "disk_io_ops": (300.0, 80.0, math.inf),
+    "process_count": (120.0, 12.0, math.inf),
+    # Network
+    "net_in_bytes": (5_000_000.0, 1_000_000.0, math.inf),
+    "net_out_bytes": (6_000_000.0, 1_200_000.0, math.inf),
+    "net_packets_dropped": (0.5, 0.3, math.inf),
     "active_connections": (80.0, 15.0, math.inf),
+    # Service health -- error rates are FRACTIONS (0-1), not percentages
+    "request_rate": (50.0, 10.0, math.inf),
+    "error_rate_5xx": (0.002, 0.0015, 1.0),
+    "error_rate_4xx": (0.010, 0.005, 1.0),
+    "latency_p50": (40.0, 8.0, math.inf),
+    "latency_p95": (120.0, 20.0, math.inf),
+    "latency_p99": (220.0, 40.0, math.inf),
+    # Availability -- uptime_seconds is derived, not drawn (see module docstring)
+    "health_check_pass": (1.0, 0.0, 1.0),
+    "healthy_target_count": (4.0, 0.0, math.inf),
+    "uptime_seconds": (0.0, 0.0, math.inf),
+    # Saturation
     "queue_depth": (5.0, 3.0, math.inf),
-    "http_5xx_rate_pct": (0.2, 0.15, 100.0),
-    "http_4xx_rate_pct": (1.0, 0.5, 100.0),
-    "db_connections_used": (0.0, 0.0, math.inf),
-    "db_query_latency_p95_ms": (0.0, 0.0, math.inf),
-    "cache_hit_rate_pct": (0.0, 0.0, 100.0),
-    "uptime_pct": (99.95, 0.05, 100.0),
+    "throttle_count": (0.1, 0.1, math.inf),
+    # Reserve
+    "replication_lag_seconds": (0.4, 0.2, math.inf),
+    "tcp_retransmit_rate": (0.001, 0.0008, 1.0),
+    "swap_used_percent": (2.0, 1.0, 100.0),
+    "open_file_descriptors": (1200.0, 150.0, math.inf),
+    "gc_pause_ms": (0.0, 0.0, math.inf),
 }
 
 # Overrides layered on top of the default baseline, per resource kind.
 _KIND_BASELINES: dict[str, dict[str, Baseline]] = {
     "database": {
-        "cpu_pct": (45.0, 10.0, 100.0),
-        "request_rate_per_s": (20.0, 5.0, math.inf),
-        "db_connections_used": (40.0, 10.0, math.inf),
-        "db_query_latency_p95_ms": (25.0, 8.0, math.inf),
+        "cpu_percent": (45.0, 10.0, 100.0),
+        "request_rate": (20.0, 5.0, math.inf),
+        "active_connections": (40.0, 10.0, math.inf),
+        "latency_p95": (25.0, 8.0, math.inf),
+        "latency_p99": (60.0, 15.0, math.inf),
+        "throttle_count": (0.2, 0.15, math.inf),
+        "disk_io_ops": (900.0, 200.0, math.inf),
     },
     "cache": {
-        "memory_pct": (60.0, 8.0, 100.0),
-        "latency_p50_ms": (2.0, 1.0, math.inf),
-        "cache_hit_rate_pct": (92.0, 4.0, 100.0),
+        "memory_percent": (60.0, 8.0, 100.0),
+        "latency_p50": (2.0, 1.0, math.inf),
+        "latency_p95": (5.0, 2.0, math.inf),
+        "latency_p99": (9.0, 3.0, math.inf),
     },
     "worker": {
-        "cpu_pct": (50.0, 12.0, 100.0),
-        "request_rate_per_s": (5.0, 2.0, math.inf),
+        "cpu_percent": (50.0, 12.0, 100.0),
+        "process_count": (60.0, 8.0, math.inf),
         "queue_depth": (15.0, 6.0, math.inf),
     },
     "load_balancer": {
-        "request_rate_per_s": (200.0, 30.0, math.inf),
+        "request_rate": (200.0, 30.0, math.inf),
         "active_connections": (300.0, 50.0, math.inf),
-        "network_in_bytes_per_s": (15_000_000.0, 2_000_000.0, math.inf),
-        "network_out_bytes_per_s": (18_000_000.0, 2_500_000.0, math.inf),
+        "net_in_bytes": (15_000_000.0, 2_000_000.0, math.inf),
+        "net_out_bytes": (18_000_000.0, 2_500_000.0, math.inf),
     },
+}
+
+# Request-path metrics. `docs/metric-schema.md` notes that signals 9 and 10-15
+# are load-balancer / ALB metrics which "a bare instance has none of on any
+# provider" -- a queue-driven worker is the case where that bites.
+_REQUEST_PATH: frozenset[str] = frozenset(
+    {
+        "active_connections",
+        "request_rate",
+        "error_rate_5xx",
+        "error_rate_4xx",
+        "latency_p50",
+        "latency_p95",
+        "latency_p99",
+    }
+)
+
+# Signals that do NOT apply per kind, and are therefore omitted (= null).
+# `gc_pause_ms` is absent everywhere: the schema calls it testbed-only.
+_NOT_APPLICABLE_BY_KIND: dict[str, frozenset[str]] = {
+    "web_service": frozenset(
+        {"healthy_target_count", "queue_depth", "throttle_count", "replication_lag_seconds"}
+    )
+    | {"gc_pause_ms"},
+    "database": frozenset({"healthy_target_count", "queue_depth", "gc_pause_ms"}),
+    "cache": frozenset(
+        {"healthy_target_count", "queue_depth", "throttle_count", "replication_lag_seconds"}
+    )
+    | {"gc_pause_ms"},
+    "worker": _REQUEST_PATH
+    | frozenset({"healthy_target_count", "replication_lag_seconds", "gc_pause_ms"}),
+    "load_balancer": frozenset(
+        {"queue_depth", "throttle_count", "replication_lag_seconds", "gc_pause_ms"}
+    ),
 }
 
 # Signals that track daily load rather than staying roughly constant.
 _SEASONAL_SIGNALS: frozenset[str] = frozenset(
     {
-        "cpu_pct",
-        "memory_pct",
-        "network_in_bytes_per_s",
-        "network_out_bytes_per_s",
-        "request_rate_per_s",
+        "cpu_percent",
+        "memory_percent",
+        "net_in_bytes",
+        "net_out_bytes",
+        "request_rate",
         "active_connections",
         "queue_depth",
-        "disk_read_bytes_per_s",
-        "disk_write_bytes_per_s",
-        "db_connections_used",
+        "disk_io_ops",
+        "throttle_count",
     }
 )
+
+#: Per-resource boot time, so `uptime_seconds` is monotonic between restarts.
+_BOOT_TIME: dict[str, datetime] = {}
+
+
+def get_resource(resource_id: str) -> Resource | None:
+    """Public lookup for callers outside this module (e.g.
+    `core.providers.simulated_executor`) that need to validate a resource id
+    without reaching into the private `_RESOURCE_BY_ID` table directly."""
+    return _RESOURCE_BY_ID.get(resource_id)
+
+
+def applicable_signals(kind: str) -> tuple[str, ...]:
+    """Signals this resource kind reports. Everything else is null for it."""
+    na = _NOT_APPLICABLE_BY_KIND.get(kind, frozenset())
+    return tuple(s for s in ALL_COLLECTED_SIGNALS if s not in na)
 
 
 #: Signals audited for the clamp-at-zero pattern (every entry in
@@ -264,6 +357,11 @@ def _baseline_for(kind: str) -> dict[str, Baseline]:
     return {**_DEFAULT_BASELINE, **_KIND_BASELINES.get(kind, {})}
 
 
+def _uptime_seconds(resource_id: str, now: datetime) -> float:
+    boot = _BOOT_TIME.setdefault(resource_id, now)
+    return max(0.0, (now - boot).total_seconds())
+
+
 def _generate_signals(resource: Resource, now: datetime) -> dict[str, float]:
     """One reading per applicable signal. Non-applicable signals are absent.
 
@@ -275,7 +373,10 @@ def _generate_signals(resource: Resource, now: datetime) -> dict[str, float]:
     baseline = _baseline_for(resource.kind)
     factor = _seasonal_factor(now)
     signals: dict[str, float] = {}
-    for signal in CANONICAL_SIGNALS:
+    for signal in applicable_signals(resource.kind):
+        if signal == "uptime_seconds":
+            signals[signal] = _uptime_seconds(resource.id, now)
+            continue
         mean, std, ceiling = baseline[signal]
         scaled_mean = mean * factor if signal in _SEASONAL_SIGNALS else mean
         if signal in _LATENCY_SIGNALS:
@@ -292,30 +393,62 @@ def _generate_signals(resource: Resource, now: datetime) -> dict[str, float]:
     return signals
 
 
+def _scale_present(signals: dict[str, float], signal: str, factor: float) -> None:
+    """Multiply a signal only if the resource actually reports it."""
+    if signal in signals:
+        signals[signal] *= factor
+
+
+def _set_present(signals: dict[str, float], signal: str, value: float) -> None:
+    if signal in signals:
+        signals[signal] = value
+
+
 def _apply_fault(
-    signals: dict[str, float], fault_type: str
+    signals: dict[str, float], fault_type: str, intensity: float = 1.0
 ) -> tuple[dict[str, float], HealthState, str]:
     """Faults override specific signals in-place; they do not replace the
     seasonal/noise model, so the pre-fault baseline is still visible in the
-    signals a fault doesn't touch."""
+    signals a fault doesn't touch. Absent signals are never introduced -- a
+    fault cannot give a worker a `request_rate` it does not have."""
     if fault_type == "cpu_hog":
-        signals["cpu_pct"] = _clamp(random.gauss(97.0, 2.0), 100.0)
-        signals["latency_p95_ms"] *= 3.0
-        signals["latency_p99_ms"] *= 4.0
+        _set_present(signals, "cpu_percent", _clamp(random.gauss(97.0, 2.0), 100.0))
+        _scale_present(signals, "latency_p95", 3.0)
+        _scale_present(signals, "latency_p99", 4.0)
         return signals, HealthState.DEGRADED, "cpu_hog fault active"
 
+    if fault_type == "cpu_ramp":
+        # Climbs from the current baseline to cpu_hog severity as intensity
+        # goes 0 -> 1. Early ticks are inside normal noise on purpose.
+        current = signals.get("cpu_percent", 0.0)
+        target = _clamp(random.gauss(97.0, 2.0), 100.0)
+        level = _clamp(intensity, 1.0)
+        _set_present(signals, "cpu_percent", current + (target - current) * level)
+        _scale_present(signals, "latency_p95", 1.0 + 2.0 * level)
+        _scale_present(signals, "latency_p99", 1.0 + 3.0 * level)
+        state = HealthState.DEGRADED if level > 0.5 else HealthState.HEALTHY
+        return signals, state, f"cpu_ramp fault active at intensity {level:.2f}"
+
+    if fault_type == "cpu_step_small":
+        # +15 points. Baseline cpu std is 8-12, so this is under two sigma:
+        # detectable only by something that models the signal, not by eye.
+        _set_present(signals, "cpu_percent", _clamp(signals.get("cpu_percent", 0.0) + 15.0, 100.0))
+        return signals, HealthState.DEGRADED, "cpu_step_small fault active"
+
     if fault_type == "latency":
-        signals["latency_p50_ms"] *= 6.0
-        signals["latency_p95_ms"] *= 8.0
-        signals["latency_p99_ms"] *= 10.0
-        signals["error_rate_pct"] = _clamp(signals["error_rate_pct"] + 5.0, 100.0)
+        _scale_present(signals, "latency_p50", 6.0)
+        _scale_present(signals, "latency_p95", 8.0)
+        _scale_present(signals, "latency_p99", 10.0)
+        if "error_rate_5xx" in signals:
+            signals["error_rate_5xx"] = _clamp(signals["error_rate_5xx"] + 0.05, 1.0)
         return signals, HealthState.DEGRADED, "latency fault active"
 
-    if fault_type in ("stop", "pause", "region_down"):
+    if fault_type in _RESTART_FAULTS:
         for signal in signals:
             signals[signal] = 0.0
-        signals["error_rate_pct"] = 100.0
-        signals["http_5xx_rate_pct"] = 100.0
+        # Error rates are fractions: a total outage is 1.0, not 100.
+        _set_present(signals, "error_rate_5xx", 1.0)
+        _set_present(signals, "health_check_pass", 0.0)
         return signals, HealthState.UNHEALTHY, f"{fault_type} fault active"
 
     return signals, HealthState.HEALTHY, "unknown fault type ignored"
@@ -336,6 +469,19 @@ _STATIC_PRICE_USD: dict[ActionType, float] = {
 }
 
 
+def _parse_fault(raw: str) -> tuple[str, float]:
+    """Fault values are `name` or `name:intensity` -- the intensity suffix is
+    what lets a ramp advance while still going through the one-string Redis
+    fault API in `core.faults`."""
+    name, _, suffix = raw.partition(":")
+    if not suffix:
+        return name, 1.0
+    try:
+        return name, float(suffix)
+    except ValueError:
+        return name, 1.0
+
+
 class SimulatedProvider(CloudProvider):
     """8 resources, 3 regions, 2 tenants, in-process -- no network calls."""
 
@@ -353,12 +499,19 @@ class SimulatedProvider(CloudProvider):
                 message="unknown resource",
             )
 
+        raw = faults.get_fault(resource.id) or self._region_fault(resource.region)
+        fault_type, intensity = _parse_fault(raw) if raw else (None, 1.0)
+
+        # Reset the boot clock BEFORE generating, so uptime reads 0 during the
+        # outage and climbs from 0 once the fault clears.
+        if fault_type in _RESTART_FAULTS:
+            _BOOT_TIME[resource.id] = now
+
         signals = _generate_signals(resource, now)
-        fault_type = faults.get_fault(resource.id) or self._region_fault(resource.region)
         state = HealthState.HEALTHY
         message = None
         if fault_type is not None:
-            signals, state, message = _apply_fault(signals, fault_type)
+            signals, state, message = _apply_fault(signals, fault_type, intensity)
 
         return HealthReport(
             resource_id=resource.id, state=state, observed_at=now, signals=signals, message=message
@@ -385,14 +538,26 @@ class SimulatedProvider(CloudProvider):
     async def get_regions(self) -> list[str]:
         return list(REGIONS)
 
-    def inject_fault(self, resource_id: str, fault_type: str, duration_seconds: int) -> None:
-        """Convenience method for the demo fault button -- not part of the
-        frozen `CloudProvider` contract, just this concrete class's own API."""
+    def inject_fault(
+        self,
+        resource_id: str,
+        fault_type: str,
+        duration_seconds: int,
+        intensity: float | None = None,
+    ) -> None:
+        """Convenience method for the demo fault button and the dataset
+        generator -- not part of the frozen `CloudProvider` contract, just this
+        concrete class's own API.
+
+        `intensity` only means anything to `cpu_ramp`; re-injecting with a
+        rising intensity is how a gradual fault advances.
+        """
         if resource_id not in _RESOURCE_BY_ID:
             raise KeyError(f"unknown resource {resource_id!r}")
         if fault_type not in FAULT_TYPES:
             raise ValueError(f"unknown fault type {fault_type!r}; expected one of {FAULT_TYPES}")
-        faults.set_fault(resource_id, fault_type, duration_seconds)
+        value = fault_type if intensity is None else f"{fault_type}:{intensity}"
+        faults.set_fault(resource_id, value, duration_seconds)
 
     def _region_fault(self, region: str) -> str | None:
         """A `region_down` fault injected against any one resource takes the

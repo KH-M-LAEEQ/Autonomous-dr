@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     app_env: Literal["local", "ci", "demo"] = "local"
     log_level: str = "INFO"
 
+    # Off by default: per-tick diagnostic logging in ml/tasks.py's live
+    # detection path (see _trace_tick). Never gates behavior, only logging.
+    detector_trace: bool = False
+
     # Persistence
     database_url: str = "postgresql+psycopg://adr:adr_dev_password@localhost:5432/adr"
     redis_url: str = "redis://localhost:6379/0"
@@ -29,7 +33,11 @@ class Settings(BaseSettings):
 
     # API
     api_host: str = "0.0.0.0"  # noqa: S104 -- bound inside Docker only
-    api_port: int = 8000
+    # 8001, not 8000 -- 8000 collides with other projects' dev servers often
+    # enough (a real one squatted on it during Week 5's smoke-test work)
+    # that the default moved rather than asking everyone to remember to
+    # override it.
+    api_port: int = 8001
     cors_origins: str = "http://localhost:5173"
 
     # Pluggable implementations, selected at runtime
