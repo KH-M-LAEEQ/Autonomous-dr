@@ -39,9 +39,14 @@ async def _poll_resource(provider: CloudProvider, resource: Resource) -> None:
             "resource_id": resource.id,
             "provider": provider.name.value,
             "kind": resource.kind,
-            "health_state": report.state.value,
         },
         fields=report.signals,
+        # A field, not a tag -- see write_metrics's docstring. health_state
+        # changes on nearly every write once a fault lands (healthy ->
+        # degraded), and nothing queries it as a filterable dimension
+        # (grepped: write-only before this), so there is no reason for it
+        # to be part of this resource's series identity.
+        string_fields={"health_state": report.state.value},
         timestamp=report.observed_at,
     )
 
