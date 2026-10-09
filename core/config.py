@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     app_env: Literal["local", "ci", "demo"] = "local"
     log_level: str = "INFO"
 
+    # Off by default: per-tick diagnostic logging in ml/tasks.py's live
+    # detection path (see _trace_tick). Never gates behavior, only logging.
+    detector_trace: bool = False
+
     # Persistence
     database_url: str = "postgresql+psycopg://adr:adr_dev_password@localhost:5432/adr"
     redis_url: str = "redis://localhost:6379/0"
