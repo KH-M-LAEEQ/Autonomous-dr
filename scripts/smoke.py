@@ -49,6 +49,7 @@ same as a real incident would be.
 
 from __future__ import annotations
 
+import shutil
 import socket
 import subprocess
 import sys
@@ -90,9 +91,18 @@ def _run(
     back to the console's codepage (cp1252 on this Windows box), and `docker
     compose --build`/`npm`'s UTF-8 output (box-drawing characters in
     progress bars, etc.) crashes the decode entirely instead of being
-    captured as a FAIL reason."""
+    captured as a FAIL reason.
+
+    `shutil.which` resolves `cmd[0]` before handing it to `subprocess.run`:
+    on Windows, `npm` is `npm.cmd`, and `CreateProcess` (what `subprocess`
+    calls without `shell=True`) does not do PATH extension resolution the
+    way `cmd.exe` does -- an unresolved "npm" raises WinError 2 ("cannot
+    find the file") instead of running. A no-op everywhere `which` already
+    finds the bare name (docker, python, ...).
+    """
+    resolved = shutil.which(cmd[0]) or cmd[0]
     return subprocess.run(  # noqa: S603 -- cmd is always a hardcoded list in this file, never user input
-        cmd,
+        [resolved, *cmd[1:]],
         cwd=cwd or ROOT,
         capture_output=True,
         text=True,
