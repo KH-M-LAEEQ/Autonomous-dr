@@ -14,12 +14,12 @@ def test_decision_terms_are_a_dict_and_absent_keys_stay_absent() -> None:
     d = Decision(
         incident_id=uuid4(),
         chosen_action=None,
-        utility=0.4,
-        terms={"cost": 0.2, "latency": 0.1, "safety": 0.9},
-        weights={"cost": 0.3, "latency": 0.3, "safety": 0.4},
+        utility=0.395,
+        terms={"ability": 1.0, "cost": 0.2, "latency": 0.1, "safety": 0.9},
+        weights={"ability": 0.20, "cost": 0.25, "latency": 0.25, "safety": 0.30},
         formula_version="w5-v1",
     )
-    assert set(d.terms) == {"cost", "latency", "safety"}
+    assert set(d.terms) == {"ability", "cost", "latency", "safety"}
     assert "impact" not in d.terms  # not zero-filled before Week 13
 
 

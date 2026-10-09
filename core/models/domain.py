@@ -9,8 +9,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.decision.utility import score, validate_terms_and_weights
 from core.models.enums import (
     ActionStatus,
     ActionTier,
@@ -117,8 +118,8 @@ class Decision(Base):
     """Output of the utility function. `utility` is the ranked score.
 
     `terms` is a dict, not fixed fields, because the formula gains keys over the
-    build (cost/latency/safety in W5, impact W13, price_delta W21, risk W22; see
-    docs/formulas.md section 1.1). A key that has not landed yet is ABSENT, never
+    build (ability/cost/latency/safety in W5, impact W13, price_delta W21, risk
+    W22; see core/decision/utility.py and ADR-0011). A key that has not landed yet is ABSENT, never
     zero-filled: an absent term and a zero-weighted term mean different things once
     `formula_version` history matters.
     """
@@ -132,6 +133,16 @@ class Decision(Base):
     formula_version: str
     rejected: list[dict[str, Any]] = Field(default_factory=list)
     rationale: str | None = None
+
+    @model_validator(mode="after")
+    def _formula_is_consistent(self) -> "Decision":
+        # Terms in [0,1], weights sum to 1, same keys, `ability` present, and the
+        # stored utility must equal the formula. A saved decision can always be
+        # re-scored from its own record.
+        validate_terms_and_weights(self.terms, self.weights)
+        if abs(self.utility - score(self.terms, self.weights)) > 1e-6:
+            raise ValueError("utility does not match terms and weights")
+        return self
 
 
 class Proposal(Base):

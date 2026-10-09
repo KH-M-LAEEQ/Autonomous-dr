@@ -30,4 +30,5 @@ artefact, and the viva committee will ask about the decisions you reversed.
 | [0008](0008-time-based-evaluation-splits.md) | Time-based evaluation splits, never shuffled | Proposed |
 | [0009](0009-pluggable-thresholds-and-structured-explanations.md) | Pluggable anomaly thresholds and structured, auditable explanations | Proposed |
 | [0010](0010-geopolitical-risk-policy-bounded.md) | Geopolitical risk is policy-bounded, not an autonomous trigger | Proposed |
+| [0011](0011-utility-formula-contract.md) | One fixed contract for the utility formula | Proposed |
 | [0012](0012-heterogeneous-detectors-per-node.md) | Heterogeneous detectors per monitor node | Proposed |
