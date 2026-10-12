@@ -14,6 +14,43 @@ All signals are per-resource, per-tenant, per-region. Tags: `tenant`, `region`,
 
 ---
 
+## InfluxDB: tags vs. fields
+
+**Tag a value only if it never changes for a resource.** `tenant_id`, `region`,
+`resource_id`, `provider`, `kind` (`core/collector.py`) are safe tags because none of
+them ever change across a resource's lifetime. Anything that changes per reading —
+every signal in this document, plus descriptive state like `health_state` — is a
+**field**, never a tag.
+
+**Why this is a hard rule, not a style preference:** InfluxDB treats each unique tag
+combination as its own series. Tagging a value that changes on nearly every write
+(e.g. `health_state` flipping `healthy` → `degraded` the instant a fault lands)
+fragments one resource's points across two series for as long as both straddle a
+query's time range. A plain `from()|>range()|>filter()` with no `group()` returns one
+Flux table per series still present in the range, and a client that iterates
+`for table in tables: for record in table.records` sees those tables in whatever
+order they happen to arrive — not necessarily chronological order across tables. Code
+that trusts `series[-1]` as "the latest reading" (as `ml/detectors/threshold.py`'s
+`_last_values` does) can end up returning a stale, pre-fault point instead of the real
+one, for as long as the stale point remains inside the query's lookback window.
+
+This exact bug shipped: `health_state` was written as a tag, diagnosed with
+`DETECTOR_TRACE=1` evidence (commit `e74055d`, which added that diagnostic logging)
+to be the root cause of a ~140–146s fault-to-detection delay, and fixed in commit
+`b0241b7` by (1) writing `health_state` as a field instead of a tag, and (2) having
+`query_recent_window` (`core/influx.py`) exclude `health_state` from its Flux query
+and explicitly sort every signal's points by timestamp in Python before returning
+them — closing the whole bug class, not just this one tag, since nothing stops a
+future tag from having the same problem.
+
+**Rule of thumb for any new tag or signal:** if two different values of it could ever
+describe the *same* resource at *different* times, it is a field. If it is fixed for
+the lifetime of the resource, it can be a tag. When in doubt, make it a field —
+queries always sort by time, so a field never produces a stale-latest-reading bug;
+an unnecessary tag can.
+
+---
+
 ## Compute (5)
 
 | # | Name | Unit | AWS CloudWatch | Azure Monitor | GCP Cloud Monitoring |
