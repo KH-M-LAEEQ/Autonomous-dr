@@ -66,11 +66,10 @@ from, not to change which detector practice data favours.
 
 ## 4. Strengths per fault type
 
-(Per-shape numbers below are from `results-v6.md`'s shape table, which keeps
-`cpu_hog` and `intermittent` separate; `breakdown-v6.md`'s "fault type" table
-pools `intermittent` bursts into the `cpu_hog` row by underlying cause, so
-its numbers look different -- cited here by shape, not fault type, to avoid
-mixing the two.)
+(Per-shape numbers below agree across `results-v6.md`'s shape table and
+`breakdown-v6.md`'s per-fault-type table, section a -- both now keep
+`cpu_hog` (sudden spike) and `intermittent` (burst) separate rows, so there
+is no pooling to reconcile.)
 
 - **Sudden spikes (`cpu_hog` shape) are a tie**: both detectors hit 1.000
   recall at the 40s hysteresis floor. No detector edge here on practice data.
