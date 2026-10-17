@@ -456,6 +456,43 @@ def test_breach_before_fault_start_is_a_false_alarm_not_a_catch(
     assert result.detection_delay_p50_s == pytest.approx(20.0)
 
 
+def test_save_predictions_flag_off_leaves_metrics_identical(tmp_path: Path) -> None:
+    """The opt-in prediction export must be pure write: toggling it on cannot
+    change a single number in the returned `EvalResult`, and leaving it off
+    (the default) must not create the predictions file at all."""
+    _write_dataset(tmp_path, ["r1", "r2"])
+
+    without = evaluate("threshold", "vtest", tmp_path)
+    assert not (tmp_path / "vtest" / "predictions-threshold.jsonl").exists()
+
+    with_export = evaluate("threshold", "vtest", tmp_path, save_predictions=True)
+    assert asdict(without) == asdict(with_export)
+
+
+def test_save_predictions_writes_one_row_per_test_window(tmp_path: Path) -> None:
+    _write_dataset(tmp_path, ["r1", "r2"])
+    result = evaluate("threshold", "vtest", tmp_path, save_predictions=True)
+
+    predictions_path = tmp_path / "vtest" / "predictions-threshold.jsonl"
+    rows = [json.loads(line) for line in predictions_path.read_text().splitlines() if line.strip()]
+    assert len(rows) == result.extra["test_windows"]
+    for row in rows:
+        assert set(row) == {
+            "resource_id",
+            "episode",
+            "fault_type",
+            "shape",
+            "phase",
+            "timestamp",
+            "true_label",
+            "breach",
+            "score",
+        }
+        assert row["phase"] in {"normal", "ramp", "fault", "recovery"}
+    assert any(row["true_label"] for row in rows)
+    assert any(not row["true_label"] for row in rows)
+
+
 def test_main_writes_a_separate_results_file_per_dataset_version(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
