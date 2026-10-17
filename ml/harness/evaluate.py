@@ -49,7 +49,7 @@ attributed to it, not stolen by whatever comes next.** `_score_resource` calls
 interface) at the first window strictly inside a new episode, and
 `_grace_fault_at` lets a lingering breach just after a fault's labelled end
 still count toward that fault rather than toward the next one. Both exist
-because the Isolation Forest row of `docs/results/practice-run.md` reported a
+because the Isolation Forest row of `docs/results/results-v5.md` reported a
 0s detection delay on `intermittent`'s back-to-back bursts: a breach streak
 from one burst's rolling-window tail only needed one more breach on the next
 burst's very first window to "detect" it instantly. See that doc's
@@ -262,7 +262,7 @@ def _grace_fault_at(
     whatever happens to be active when the 3rd consecutive breach lands --
     which, for `intermittent`'s back-to-back bursts, is usually the *next*
     episode, reported as a detection delay of 0s. See
-    `docs/results/practice-run.md`, "zero-second detection delays".
+    `docs/results/results-v5.md`, "zero-second detection delays".
     """
     if grace <= timedelta(0):
         return None
@@ -306,7 +306,7 @@ def _score_resource(
     only needs one more breach to "detect" N+1 instantly, reporting a delay
     near 0s that measures carried-over state, not how fast the detector
     actually responded to this fault. See
-    `docs/results/practice-run.md`, "zero-second detection delays".
+    `docs/results/results-v5.md`, "zero-second detection delays".
     """
     if len(windows) < 10:
         return
@@ -693,7 +693,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--detectors", nargs="+", default=["threshold_unscaled", "threshold", "iforest"]
     )
-    parser.add_argument("--out", type=Path, default=Path("docs/results/practice-run.md"))
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="defaults to docs/results/results-<dataset-version>.md",
+    )
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument(
         "--render-from",
@@ -704,6 +709,8 @@ def main(argv: list[str] | None = None) -> int:
         "detector, so this is the cheap path when only the prose changed.",
     )
     args = parser.parse_args(argv)
+    if args.out is None:
+        args.out = Path(f"docs/results/results-{args.dataset_version}.md")
 
     manifest = load_manifest(args.dataset_version, args.dataset_root)
     results: list[EvalResult] = []
