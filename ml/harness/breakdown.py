@@ -166,12 +166,13 @@ class _EpisodeLevelStats:
 
 def analyze_episode_level(
     fault_type_stats: dict[str, dict[str, _FaultTypeStats]],
+    detectors: tuple[str, ...],
 ) -> dict[str, _EpisodeLevelStats]:
     """Collapses `analyze_fault_types`'s per-fault-type table across fault
     types, per detector -- the overall share of fault occurrences caught at
     all, independent of which fault type they were."""
     out: dict[str, _EpisodeLevelStats] = {}
-    for detector in DETECTORS:
+    for detector in detectors:
         occurrences = sum(
             per_detector[detector].episodes
             for per_detector in fault_type_stats.values()
@@ -300,6 +301,7 @@ def intermittent_floor_analysis(
     seen_episode_ids: set[int],
     detected_ids: dict[str, set[int]],
     step_seconds: float,
+    detectors: tuple[str, ...],
 ) -> list[_BurstFloorRow]:
     """For every `intermittent` burst in the test slice: its length in
     collector steps against `CONSECUTIVE_BREACHES_REQUIRED` consecutive
@@ -320,7 +322,7 @@ def intermittent_floor_analysis(
             bucket = "at_floor"
         else:
             bucket = "above_floor"
-        caught_by = tuple(d for d in DETECTORS if episode in detected_ids.get(d, set()))
+        caught_by = tuple(d for d in detectors if episode in detected_ids.get(d, set()))
         rows.append(_BurstFloorRow(episode, burst_seconds, burst_steps, bucket, caught_by))
     return rows
 
@@ -352,6 +354,7 @@ def render_markdown(
     episode_level: dict[str, _EpisodeLevelStats],
     missed_window_stats: dict[str, _MissedWindowStats],
     sensitivity: dict[str, tuple[_ConfusionCounts, _ConfusionCounts]],
+    detectors: tuple[str, ...],
 ) -> str:
     lines = [
         f"# Per-fault-type and per-phase breakdown -- `{dataset_version}`",
@@ -372,7 +375,7 @@ def render_markdown(
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for fault_type in sorted(fault_type_stats):
-        for detector in DETECTORS:
+        for detector in detectors:
             s = fault_type_stats[fault_type].get(detector, _FaultTypeStats())
             recall = s.detected / s.episodes if s.episodes else float("nan")
             lines.append(
@@ -404,7 +407,7 @@ def render_markdown(
         "| Detector | Normal | Ramp | Recovery | Other | Total |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
-    for detector in DETECTORS:
+    for detector in detectors:
         counts = phase_counts.get(detector, dict.fromkeys(PHASES, 0))
         total = sum(counts.values())
         cells = " | ".join(
@@ -413,7 +416,7 @@ def render_markdown(
         lines.append(f"| `{detector}` | {cells} | {total} |")
 
     lines += [""]
-    for detector in DETECTORS:
+    for detector in detectors:
         counts = phase_counts.get(detector, dict.fromkeys(PHASES, 0))
         total = sum(counts.values())
         lines.append(
@@ -460,7 +463,7 @@ def render_markdown(
         "| Detector | Fault occurrences | Detected | Share detected |",
         "| --- | --- | --- | --- |",
     ]
-    for detector in DETECTORS:
+    for detector in detectors:
         episode_stats = episode_level.get(detector, _EpisodeLevelStats())
         share = (
             episode_stats.detected / episode_stats.occurrences
@@ -484,7 +487,7 @@ def render_markdown(
         f"{CONSECUTIVE_BREACHES_REQUIRED - 1}) | Later |",
         "| --- | --- | --- | --- |",
     ]
-    for detector in DETECTORS:
+    for detector in detectors:
         m = missed_window_stats.get(detector, _MissedWindowStats())
         total = m.unavoidable + m.later
         lines.append(f"| `{detector}` | {total} | {m.unavoidable} | {m.later} |")
@@ -500,7 +503,7 @@ def render_markdown(
         "| Detector | View | Precision | Recall | F1 | FPR |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
-    for detector in DETECTORS:
+    for detector in detectors:
         official, excl_recovery = sensitivity.get(
             detector, (_ConfusionCounts(), _ConfusionCounts())
         )
@@ -543,10 +546,10 @@ def run(dataset_version: str, root: Path, detectors: tuple[str, ...]) -> str:
 
     phase_counts = {d: false_alarms_by_phase(rows) for d, rows in predictions.items()}
     burst_rows = intermittent_floor_analysis(
-        episode_meta, ground_truth_ids, detected_ids, step_seconds
+        episode_meta, ground_truth_ids, detected_ids, step_seconds, detectors
     )
 
-    episode_level = analyze_episode_level(fault_type_stats)
+    episode_level = analyze_episode_level(fault_type_stats, detectors)
     missed_window_stats = {d: missed_window_split(rows) for d, rows in predictions.items()}
     sensitivity = recovery_excluded_sensitivity(predictions)
 
@@ -559,6 +562,7 @@ def run(dataset_version: str, root: Path, detectors: tuple[str, ...]) -> str:
         episode_level,
         missed_window_stats,
         sensitivity,
+        detectors,
     )
 
 
