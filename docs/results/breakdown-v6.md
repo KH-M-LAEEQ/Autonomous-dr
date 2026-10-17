@@ -1,0 +1,75 @@
+# Per-fault-type and per-phase breakdown -- `v6`
+
+> **Diagnosis only, not for the thesis.** Regenerated from `ml/harness/evaluate.py --save-predictions` output; see `docs/results/results-v6.md` for the headline numbers.
+
+## a) Per fault type
+
+`episodes`/`detected` are resource-occurrence counts, matching `results-v6.md`'s per-shape table convention -- an episode affecting multiple resources (`region_down`) is counted once per affected resource, so these totals reconcile with that table rather than with a plain count of distinct episodes.
+
+| Fault type | Detector | Episodes | Recall | Delay p50 | Delay p95 |
+| --- | --- | --- | --- | --- | --- |
+| `cpu_hog` | `threshold` | 33 | 0.879 | 40s | 40s |
+| `cpu_hog` | `iforest` | 33 | 0.758 | 40s | 40s |
+| `cpu_ramp` | `threshold` | 5 | 0.800 | 160s | 160s |
+| `cpu_ramp` | `iforest` | 5 | 1.000 | 240s | 448s |
+| `cpu_step_small` | `threshold` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `iforest` | 5 | 0.000 | n/a | n/a |
+| `latency` | `threshold` | 7 | 0.857 | 40s | 40s |
+| `latency` | `iforest` | 7 | 0.857 | 40s | 40s |
+| `pause` | `threshold` | 6 | 1.000 | 40s | 40s |
+| `pause` | `iforest` | 6 | 1.000 | 40s | 40s |
+| `region_down` | `threshold` | 14 | 1.000 | 40s | 40s |
+| `region_down` | `iforest` | 14 | 1.000 | 40s | 40s |
+| `stop` | `threshold` | 5 | 1.000 | 40s | 40s |
+| `stop` | `iforest` | 5 | 1.000 | 40s | 40s |
+
+Episodes missed by **both** detectors (deduplicated by episode id, unlike the table above):
+
+| Fault type | Missed by both |
+| --- | --- |
+| `cpu_hog` | 2 |
+| `cpu_step_small` | 5 |
+| `latency` | 1 |
+
+## b) False alarms by phase
+
+`ramp`/`fault` cannot appear here by construction -- a false alarm is, by definition, a breach on a ground-truth-normal window, and those two phases only ever apply to a window already inside a labelled fault. Zero in those columns is the expected, structural answer, not a gap in the data.
+
+| Detector | Normal | Ramp | Recovery | Other | Total |
+| --- | --- | --- | --- | --- | --- |
+| `threshold` | 5 (71%) | 0 (0%) | 2 (29%) | 0 (0%) | 7 |
+| `iforest` | 38 (7%) | 0 (0%) | 511 (93%) | 0 (0%) | 549 |
+
+## c) Intermittent bursts vs the hysteresis floor
+
+`3` consecutive breaches are required to detect anything, so a burst shorter than that many collector steps is structurally undetectable regardless of score; a burst of exactly `3` steps has no slack at all -- every single step of it must breach, or the burst is missed.
+
+| Episode | Burst length | Steps | vs floor | Caught by |
+| --- | --- | --- | --- | --- |
+| 374 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 375 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 376 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 377 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 378 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 384 | 60s | 3.0 | at_floor | `threshold` |
+| 385 | 60s | 3.0 | at_floor | `iforest` |
+| 386 | 60s | 3.0 | at_floor | `iforest` |
+| 387 | 60s | 3.0 | at_floor | `threshold` |
+| 388 | 60s | 3.0 | at_floor | neither |
+| 393 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 394 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 395 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 396 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 397 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 410 | 60s | 3.0 | at_floor | neither |
+| 411 | 60s | 3.0 | at_floor | `threshold` |
+| 412 | 60s | 3.0 | at_floor | `threshold` |
+| 413 | 60s | 3.0 | at_floor | `threshold` |
+| 414 | 60s | 3.0 | at_floor | `threshold` |
+| 425 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 426 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 427 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 428 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+| 429 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
+
+0 burst(s) below the floor (structurally uncatchable); 25 at the floor, of which 23 were actually caught (zero tolerance for a missed step within the burst); 0 above the floor with at least one step of slack.
