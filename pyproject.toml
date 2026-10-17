@@ -30,13 +30,16 @@ dev = [
     "pre-commit>=4.0",
     "detect-secrets>=1.5",
 ]
-# Installed by the AI role only. torch / torch-geometric are NOT here on purpose:
-# install those per Week 14 with the right CUDA/CPU wheel for your machine.
+# Installed by the AI role only. torch-geometric is NOT here on purpose:
+# install that per Week 14 with the right CUDA/CPU wheel for your machine.
+# torch is pinned to a CPU-only build for the LSTM detector (PB-14); install
+# with: pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.1
 ml = [
     "numpy>=2.1",
     "pandas>=2.2",
     "scikit-learn>=1.5",
     "pyod>=2.0",
+    "torch==2.14.1",
     "networkx>=3.4",
     "matplotlib>=3.9",
 ]
