@@ -2,61 +2,77 @@
 
 Date: 2026-10-17
 Branch: `pr/j-dataset-v6` (based on `pr/i-influx-followups`)
-Commit at build time: `86a6b1e25733f26cb138991597b4a236eed0bf71`
+Commit at build time: `f241d2fbe5b9a2c868cbf43477c0643719775f05`
 
-## Commands
+## v5's full build command
+
+v5's manifest schedule (65/180–600/10/20, not the generator's bare
+defaults) could only have come from explicit flags beyond what
+`docs/results/results-v5.md` documents. Reconstructed from every field
+in `ml/datasets/v5/manifest.json` against `make_episodes.py --help`:
 
 ```
-python -m ml.datasets.make_episodes --seed 42 --episodes 432 --version v6 --fault-store memory
+python -m ml.datasets.make_episodes \
+  --seed 42 --episodes 300 --version v5 --fault-store memory \
+  --normal-minutes 65 --fault-seconds-min 180 --fault-seconds-max 600 \
+  --recover-minutes 10 --step-seconds 20 --ramp-minutes 10 \
+  --small-step-seconds 300 --intermittent-on 1 --intermittent-off 1 \
+  --intermittent-minutes 10 --window-samples 12 \
+  --start 2026-01-01T00:00:00+00:00
 python -m ml.harness.evaluate --dataset-version v6
 ```
 
-Build time: 1m31.7s. Harness time: 12m22.4s (IsolationForest fit/score dominates).
+v6 was rebuilt with the identical command (only `--version v6`).
 
-## v5 vs v6
+## The 432 vs 648 episode mismatch, explained
 
-| Detector | Dataset | Precision | Recall | F1 | FPR | Delay p50 | p95 | p99 |
+`--episodes` sets `scheduled_episode_count` (generator loop iterations),
+not `episode_count` (label rows, what the harness scores). An
+`intermittent` episode emits one label row per ON burst (5 bursts/episode),
+so `episode_count > scheduled_episode_count` whenever `intermittent` is in
+the shape mix. v5's `episode_count` is 432 but its actual
+`scheduled_episode_count` is **300** — the previous v6 attempt passed
+`--episodes 432` (copying the wrong field from the manifest) and, combined
+with un-matched schedule defaults, produced 648 label rows instead.
+
+## Manifest diff (v5 vs rebuilt v6)
+
+Only `version`, `simulator_version` (v6 has it, v5 predates the fix),
+`created`, and `generator_commit` differ. `episode_count` (432),
+`scheduled_episode_count` (300), `window_count` (590,712),
+`shape_distribution`, `fault_type_distribution`, `virtual_clock`, and
+`schedule` are byte-identical — **Step 2c passed**, so the "not
+apples-to-apples" warning from the previous note is removed.
+
+## v5 vs v6 results
+
+| Detector | Dataset | Precision | Recall | F1 | FPR | p50 | p95 | p99 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `threshold_unscaled` | v5 | 0.000 | 0.000 | 0.000 | 0.000 | n/a | n/a | n/a |
 | `threshold_unscaled` | v6 | 0.000 | 0.000 | 0.000 | 0.000 | n/a | n/a | n/a |
 | `threshold` | v5 | 1.000 | 0.719 | 0.836 | 0.000 | 40s | 100s | 145s |
-| `threshold` | v6 | 0.997 | 0.598 | 0.748 | 0.000 | 20s | 100s | 219s |
+| `threshold` | v6 | 0.990 | 0.719 | 0.833 | 0.000 | 40s | 91s | 160s |
 | `iforest` | v5 | 0.554 | 0.688 | 0.613 | 0.006 | 40s | 144s | 288s |
-| `iforest` | v6 | 0.514 | 0.567 | 0.540 | 0.019 | 20s | 220s | 355s |
+| `iforest` | v6 | 0.562 | 0.705 | 0.625 | 0.006 | 40s | 200s | 344s |
 
-p50 <= p95 <= p99 holds for both detectors. No NaNs other than the expected
-`threshold_unscaled` row (same as v5 — that rule is a pre-fix baseline that
-never fires).
+p50 <= p95 <= p99 holds for both detectors on v6. No NaNs beyond the
+expected `threshold_unscaled` baseline row. The small remaining deltas
+(recall/F1 within ~1pt, delay tails shifted) come from simulator code
+that changed between v5's generator commit (`b655650704fa...`) and v6's
+(`f241d2fbe5b9...`) — notably the log-normal latency fix (`346fa62`) and
+the strictly-positive-signal clamp removal (`5a2cd87`) — not from any
+schedule or detector difference.
 
-## Warning: v6 does not reproduce v5's schedule
+## Harness fix
 
-`--episodes 432` was passed, matching v5's command exactly, but the
-generator's own argparse defaults for `--normal-minutes` (10),
-`--fault-seconds-min/max` (60/180), `--recover-minutes` (2) and
-`--step-seconds` (10) do **not** match what v5's manifest records
-(65 / 180–600 / 10 / 20). Those defaults are identical in both v5's
-generator commit (`b655650704fa...`) and v6's (`86a6b1e25733...`), so v5
-must have been built with extra undocumented flags, not the bare command
-in `docs/results/practice-run.md`.
+`ml/harness/evaluate.py --out` now defaults to
+`docs/results/results-<dataset-version>.md` instead of a fixed
+`docs/results/practice-run.md`, so scoring one dataset version no longer
+overwrites another's results file. v5's file was `git mv`'d to
+`docs/results/results-v5.md` (content unchanged); this run wrote
+`docs/results/results-v6.md`. Regression test:
+`ml/tests/test_harness.py::test_main_writes_a_separate_results_file_per_dataset_version`.
+Full suite (25 tests), ruff, and mypy all pass on the changed files.
 
-Effect: v6 produced 648 episodes (not 432) and 337,856 windows (not the
-expected ~590k, ~57% of v5), on a shorter/denser virtual-clock schedule.
-The F1/FPR numbers above are therefore not an apples-to-apples detector
-comparison — they also reflect a different, shorter-cycle dataset. Window
-count, episode count, and schedule should be reconciled (i.e. the
-documented command should be corrected, or v6 rebuilt with v5's actual
-flags) before these numbers are used for anything beyond a pipeline smoke
-check.
-
-## Other observations
-
-- `manifest.json` now records `simulator_version: 3` (fixed by `779a1d2`,
-  absent from v5's manifest).
-- The harness's own `docs/results/practice-run.md` write (triggered by
-  `--dataset-version v6`) overwrote the file with v6's numbers, clobbering
-  the v5 record. That file was reverted to its v5 content in this branch;
-  v6's full per-shape/per-count breakdown and the generated prose (which
-  has a couple of unsubstituted template values, e.g. "floor is 30s rather
-  than 30s") can be regenerated by re-running the harness command above if
-  needed, but was not committed here.
-- No tests run, no detector settings changed, `core/interfaces/` untouched.
+No tests run beyond that, no detector settings changed, `core/interfaces/`
+untouched.

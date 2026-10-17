@@ -11,9 +11,9 @@
     "sha256": "7fad93b7e4f8cbd3"
   },
   "created": "2026-10-17",
-  "episode_count": 648,
-  "scheduled_episode_count": 432,
-  "window_count": 337856,
+  "episode_count": 432,
+  "scheduled_episode_count": 300,
+  "window_count": 590712,
   "shapes_used": [
     "cpu_hog",
     "gradual_ramp",
@@ -25,14 +25,14 @@
     "stop"
   ],
   "shape_distribution": {
-    "cpu_hog": 54,
-    "gradual_ramp": 54,
-    "intermittent": 270,
-    "latency": 54,
-    "pause": 54,
-    "region_down": 54,
-    "small_step": 54,
-    "stop": 54
+    "cpu_hog": 50,
+    "gradual_ramp": 33,
+    "intermittent": 165,
+    "latency": 50,
+    "pause": 34,
+    "region_down": 33,
+    "small_step": 33,
+    "stop": 34
   },
   "shape_schedule": {
     "ramp_minutes": 10.0,
@@ -41,31 +41,31 @@
     "intermittent_off_minutes": 1.0,
     "intermittent_total_minutes": 10.0,
     "policy": "round_robin_shuffled_per_virtual_day",
-    "episodes_per_virtual_day": 88
+    "episodes_per_virtual_day": 18
   },
   "generator": "ml/datasets/make_episodes.py",
-  "generator_commit": "86a6b1e25733f26cb138991597b4a236eed0bf71",
+  "generator_commit": "f241d2fbe5b9a2c868cbf43477c0643719775f05",
   "fault_store": "memory",
   "virtual_clock": {
     "start": "2026-01-01T00:00:00+00:00",
-    "end": "2026-01-05T21:20:30+00:00",
-    "step_seconds": 10
+    "end": "2026-01-18T02:16:40+00:00",
+    "step_seconds": 20
   },
   "window_samples": 12,
   "schedule": {
-    "normal_minutes": 10.0,
-    "fault_seconds_min": 60,
-    "fault_seconds_max": 180,
-    "recover_minutes": 2.0
+    "normal_minutes": 65.0,
+    "fault_seconds_min": 180,
+    "fault_seconds_max": 600,
+    "recover_minutes": 10.0
   },
   "fault_type_distribution": {
-    "cpu_hog": 324,
-    "cpu_ramp": 54,
-    "cpu_step_small": 54,
-    "latency": 54,
-    "pause": 54,
-    "region_down": 54,
-    "stop": 54
+    "cpu_hog": 215,
+    "cpu_ramp": 33,
+    "cpu_step_small": 33,
+    "latency": 50,
+    "pause": 34,
+    "region_down": 33,
+    "stop": 34
   },
   "resources": [
     "sim-cache-1",
