@@ -38,3 +38,7 @@ from ml.detectors import threshold  # noqa: E402, F401
 # `unknown detector 'iforest'; registered: ['threshold']`.
 with contextlib.suppress(ModuleNotFoundError):
     from ml.detectors import iforest  # noqa: F401
+
+# Same guard, for @register("pyod_*") -- pyod is also only in the `ml` extra.
+with contextlib.suppress(ModuleNotFoundError):
+    from ml.detectors import pyod_detector  # noqa: F401
