@@ -4,24 +4,26 @@
 
 ## a) Per fault type
 
-`episodes`/`detected` are resource-occurrence counts, matching `results-v6.md`'s per-shape table convention -- an episode affecting multiple resources (`region_down`) is counted once per affected resource, so these totals reconcile with that table rather than with a plain count of distinct episodes.
+`episodes`/`detected` are resource-occurrence counts, matching `results-v6.md`'s per-shape table convention -- an episode affecting multiple resources (`region_down`) is counted once per affected resource, so these totals reconcile with that table rather than with a plain count of distinct episodes. Rows are split by `(fault_type, shape)`, not fault type alone -- `cpu_hog` covers both a sudden spike and an intermittent burst, which fail very differently under the hysteresis rule.
 
-| Fault type | Detector | Episodes | Recall | Delay p50 | Delay p95 |
-| --- | --- | --- | --- | --- | --- |
-| `cpu_hog` | `threshold` | 33 | 0.879 | 40s | 40s |
-| `cpu_hog` | `iforest` | 33 | 0.758 | 40s | 40s |
-| `cpu_ramp` | `threshold` | 5 | 0.800 | 160s | 160s |
-| `cpu_ramp` | `iforest` | 5 | 1.000 | 240s | 448s |
-| `cpu_step_small` | `threshold` | 5 | 0.000 | n/a | n/a |
-| `cpu_step_small` | `iforest` | 5 | 0.000 | n/a | n/a |
-| `latency` | `threshold` | 7 | 0.857 | 40s | 40s |
-| `latency` | `iforest` | 7 | 0.857 | 40s | 40s |
-| `pause` | `threshold` | 6 | 1.000 | 40s | 40s |
-| `pause` | `iforest` | 6 | 1.000 | 40s | 40s |
-| `region_down` | `threshold` | 14 | 1.000 | 40s | 40s |
-| `region_down` | `iforest` | 14 | 1.000 | 40s | 40s |
-| `stop` | `threshold` | 5 | 1.000 | 40s | 40s |
-| `stop` | `iforest` | 5 | 1.000 | 40s | 40s |
+| Fault type | Shape | Detector | Episodes | Recall | Delay p50 | Delay p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpu_hog` | `cpu_hog` | `threshold` | 8 | 1.000 | 40s | 40s |
+| `cpu_hog` | `cpu_hog` | `iforest` | 8 | 1.000 | 40s | 40s |
+| `cpu_hog` | `intermittent` | `threshold` | 25 | 0.840 | 40s | 40s |
+| `cpu_hog` | `intermittent` | `iforest` | 25 | 0.680 | 40s | 40s |
+| `cpu_ramp` | `gradual_ramp` | `threshold` | 5 | 0.800 | 160s | 160s |
+| `cpu_ramp` | `gradual_ramp` | `iforest` | 5 | 1.000 | 240s | 448s |
+| `cpu_step_small` | `small_step` | `threshold` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `small_step` | `iforest` | 5 | 0.000 | n/a | n/a |
+| `latency` | `latency` | `threshold` | 7 | 0.857 | 40s | 40s |
+| `latency` | `latency` | `iforest` | 7 | 0.857 | 40s | 40s |
+| `pause` | `pause` | `threshold` | 6 | 1.000 | 40s | 40s |
+| `pause` | `pause` | `iforest` | 6 | 1.000 | 40s | 40s |
+| `region_down` | `region_down` | `threshold` | 14 | 1.000 | 40s | 40s |
+| `region_down` | `region_down` | `iforest` | 14 | 1.000 | 40s | 40s |
+| `stop` | `stop` | `threshold` | 5 | 1.000 | 40s | 40s |
+| `stop` | `stop` | `iforest` | 5 | 1.000 | 40s | 40s |
 
 Episodes missed by **both** detectors (deduplicated by episode id, unlike the table above):
 

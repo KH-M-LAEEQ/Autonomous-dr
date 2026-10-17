@@ -122,12 +122,22 @@ def analyze_fault_types(
     intervals_by_resource: dict[str, list[FaultInterval]],
     episode_meta: dict[int, FaultInterval],
     grace: timedelta,
-) -> tuple[dict[str, dict[str, _FaultTypeStats]], dict[str, set[int]], dict[str, set[int]]]:
-    """Per (fault_type, detector) episode stats, plus -- deduplicated by
-    episode id, unlike the table above -- which episodes each detector
+) -> tuple[
+    dict[tuple[str, str], dict[str, _FaultTypeStats]], dict[str, set[int]], dict[str, set[int]]
+]:
+    """Per ((fault_type, shape), detector) episode stats, plus -- deduplicated
+    by episode id, unlike the table above -- which episodes each detector
     actually caught, so callers can ask "missed by both" without inheriting
-    the resource-occurrence double counting."""
-    stats: dict[str, dict[str, _FaultTypeStats]] = defaultdict(lambda: defaultdict(_FaultTypeStats))
+    the resource-occurrence double counting.
+
+    Keyed by `(fault_type, shape)` rather than `fault_type` alone: `cpu_hog`
+    covers two distinct shapes (a sudden spike and an intermittent burst)
+    that fail very differently under the hysteresis rule, and pooling them
+    into one `cpu_hog` row hid that -- see `docs/results/results-v6.md`'s
+    per-shape table, where `intermittent`'s recall is visibly worse."""
+    stats: dict[tuple[str, str], dict[str, _FaultTypeStats]] = defaultdict(
+        lambda: defaultdict(_FaultTypeStats)
+    )
     seen_ids: dict[str, set[int]] = defaultdict(set)
     detected_ids: dict[str, set[int]] = defaultdict(set)
 
@@ -144,7 +154,7 @@ def analyze_fault_types(
 
             for episode in episodes_seen:
                 meta = episode_meta[episode]
-                row_stats = stats[meta.fault_type][detector]
+                row_stats = stats[(meta.fault_type, meta.shape)][detector]
                 row_stats.episodes += 1
                 if episode in first_alarm:
                     row_stats.detected += 1
@@ -165,7 +175,7 @@ class _EpisodeLevelStats:
 
 
 def analyze_episode_level(
-    fault_type_stats: dict[str, dict[str, _FaultTypeStats]],
+    fault_type_stats: dict[tuple[str, str], dict[str, _FaultTypeStats]],
     detectors: tuple[str, ...],
 ) -> dict[str, _EpisodeLevelStats]:
     """Collapses `analyze_fault_types`'s per-fault-type table across fault
@@ -347,7 +357,7 @@ def _fmt_s(value: float) -> str:
 
 def render_markdown(
     dataset_version: str,
-    fault_type_stats: dict[str, dict[str, _FaultTypeStats]],
+    fault_type_stats: dict[tuple[str, str], dict[str, _FaultTypeStats]],
     missed_by_both: dict[str, int],
     phase_counts: dict[str, dict[str, int]],
     burst_rows: list[_BurstFloorRow],
@@ -369,17 +379,20 @@ def render_markdown(
         "`results-v6.md`'s per-shape table convention -- an episode affecting "
         "multiple resources (`region_down`) is counted once per affected "
         "resource, so these totals reconcile with that table rather than with "
-        "a plain count of distinct episodes.",
+        "a plain count of distinct episodes. Rows are split by `(fault_type, "
+        "shape)`, not fault type alone -- `cpu_hog` covers both a sudden spike "
+        "and an intermittent burst, which fail very differently under the "
+        "hysteresis rule.",
         "",
-        "| Fault type | Detector | Episodes | Recall | Delay p50 | Delay p95 |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Fault type | Shape | Detector | Episodes | Recall | Delay p50 | Delay p95 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for fault_type in sorted(fault_type_stats):
+    for fault_type, shape in sorted(fault_type_stats):
         for detector in detectors:
-            s = fault_type_stats[fault_type].get(detector, _FaultTypeStats())
+            s = fault_type_stats[(fault_type, shape)].get(detector, _FaultTypeStats())
             recall = s.detected / s.episodes if s.episodes else float("nan")
             lines.append(
-                f"| `{fault_type}` | `{detector}` | {s.episodes} | {_fmt(recall)} "
+                f"| `{fault_type}` | `{shape}` | `{detector}` | {s.episodes} | {_fmt(recall)} "
                 f"| {_fmt_s(_percentile(s.delays_s, 50))} | {_fmt_s(_percentile(s.delays_s, 95))} |"
             )
 

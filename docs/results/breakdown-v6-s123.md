@@ -6,6 +6,8 @@
 
 `episodes`/`detected` are resource-occurrence counts, matching `results-v6.md`'s per-shape table convention -- an episode affecting multiple resources (`region_down`) is counted once per affected resource, so these totals reconcile with that table rather than with a plain count of distinct episodes.
 
+Note: this table pools intermittent bursts into cpu_hog (fixed in breakdown.py later); other sections are unaffected.
+
 | Fault type | Detector | Episodes | Recall | Delay p50 | Delay p95 |
 | --- | --- | --- | --- | --- | --- |
 | `cpu_hog` | `threshold` | 27 | 1.000 | 40s | 68s |

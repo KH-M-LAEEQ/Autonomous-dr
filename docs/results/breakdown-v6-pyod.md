@@ -4,59 +4,66 @@
 
 ## a) Per fault type
 
-`episodes`/`detected` are resource-occurrence counts, matching `results-v6.md`'s per-shape table convention -- an episode affecting multiple resources (`region_down`) is counted once per affected resource, so these totals reconcile with that table rather than with a plain count of distinct episodes.
+`episodes`/`detected` are resource-occurrence counts, matching `results-v6.md`'s per-shape table convention -- an episode affecting multiple resources (`region_down`) is counted once per affected resource, so these totals reconcile with that table rather than with a plain count of distinct episodes. Rows are split by `(fault_type, shape)`, not fault type alone -- `cpu_hog` covers both a sudden spike and an intermittent burst, which fail very differently under the hysteresis rule.
 
-| Fault type | Detector | Episodes | Recall | Delay p50 | Delay p95 |
-| --- | --- | --- | --- | --- | --- |
-| `cpu_hog` | `threshold` | 33 | 0.879 | 40s | 40s |
-| `cpu_hog` | `iforest` | 33 | 0.758 | 40s | 40s |
-| `cpu_hog` | `pyod_ecod` | 33 | 0.545 | 40s | 86s |
-| `cpu_hog` | `pyod_copod` | 33 | 0.576 | 40s | 42s |
-| `cpu_hog` | `pyod_hbos` | 33 | 0.091 | 100s | 208s |
-| `cpu_hog` | `pyod_lof` | 33 | 0.182 | 50s | 210s |
-| `cpu_hog` | `pyod_knn` | 33 | 0.000 | n/a | n/a |
-| `cpu_ramp` | `threshold` | 5 | 0.800 | 160s | 160s |
-| `cpu_ramp` | `iforest` | 5 | 1.000 | 240s | 448s |
-| `cpu_ramp` | `pyod_ecod` | 5 | 0.600 | 200s | 236s |
-| `cpu_ramp` | `pyod_copod` | 5 | 0.800 | 140s | 245s |
-| `cpu_ramp` | `pyod_hbos` | 5 | 0.000 | n/a | n/a |
-| `cpu_ramp` | `pyod_lof` | 5 | 0.200 | 420s | 420s |
-| `cpu_ramp` | `pyod_knn` | 5 | 0.000 | n/a | n/a |
-| `cpu_step_small` | `threshold` | 5 | 0.000 | n/a | n/a |
-| `cpu_step_small` | `iforest` | 5 | 0.000 | n/a | n/a |
-| `cpu_step_small` | `pyod_ecod` | 5 | 0.000 | n/a | n/a |
-| `cpu_step_small` | `pyod_copod` | 5 | 0.000 | n/a | n/a |
-| `cpu_step_small` | `pyod_hbos` | 5 | 0.000 | n/a | n/a |
-| `cpu_step_small` | `pyod_lof` | 5 | 0.200 | 200s | 200s |
-| `cpu_step_small` | `pyod_knn` | 5 | 0.000 | n/a | n/a |
-| `latency` | `threshold` | 7 | 0.857 | 40s | 40s |
-| `latency` | `iforest` | 7 | 0.857 | 40s | 40s |
-| `latency` | `pyod_ecod` | 7 | 0.857 | 40s | 40s |
-| `latency` | `pyod_copod` | 7 | 0.857 | 40s | 40s |
-| `latency` | `pyod_hbos` | 7 | 0.857 | 40s | 40s |
-| `latency` | `pyod_lof` | 7 | 0.143 | 320s | 320s |
-| `latency` | `pyod_knn` | 7 | 0.143 | 320s | 320s |
-| `pause` | `threshold` | 6 | 1.000 | 40s | 40s |
-| `pause` | `iforest` | 6 | 1.000 | 40s | 40s |
-| `pause` | `pyod_ecod` | 6 | 1.000 | 40s | 40s |
-| `pause` | `pyod_copod` | 6 | 1.000 | 40s | 40s |
-| `pause` | `pyod_hbos` | 6 | 1.000 | 40s | 40s |
-| `pause` | `pyod_lof` | 6 | 1.000 | 70s | 185s |
-| `pause` | `pyod_knn` | 6 | 0.333 | 40s | 40s |
-| `region_down` | `threshold` | 14 | 1.000 | 40s | 40s |
-| `region_down` | `iforest` | 14 | 1.000 | 40s | 40s |
-| `region_down` | `pyod_ecod` | 14 | 1.000 | 40s | 40s |
-| `region_down` | `pyod_copod` | 14 | 1.000 | 40s | 40s |
-| `region_down` | `pyod_hbos` | 14 | 1.000 | 40s | 40s |
-| `region_down` | `pyod_lof` | 14 | 1.000 | 40s | 194s |
-| `region_down` | `pyod_knn` | 14 | 0.786 | 40s | 330s |
-| `stop` | `threshold` | 5 | 1.000 | 40s | 40s |
-| `stop` | `iforest` | 5 | 1.000 | 40s | 40s |
-| `stop` | `pyod_ecod` | 5 | 1.000 | 40s | 40s |
-| `stop` | `pyod_copod` | 5 | 1.000 | 40s | 40s |
-| `stop` | `pyod_hbos` | 5 | 1.000 | 40s | 40s |
-| `stop` | `pyod_lof` | 5 | 1.000 | 120s | 208s |
-| `stop` | `pyod_knn` | 5 | 0.200 | 40s | 40s |
+| Fault type | Shape | Detector | Episodes | Recall | Delay p50 | Delay p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpu_hog` | `cpu_hog` | `threshold` | 8 | 1.000 | 40s | 40s |
+| `cpu_hog` | `cpu_hog` | `iforest` | 8 | 1.000 | 40s | 40s |
+| `cpu_hog` | `cpu_hog` | `pyod_ecod` | 8 | 1.000 | 50s | 106s |
+| `cpu_hog` | `cpu_hog` | `pyod_copod` | 8 | 1.000 | 40s | 53s |
+| `cpu_hog` | `cpu_hog` | `pyod_hbos` | 8 | 0.125 | 40s | 40s |
+| `cpu_hog` | `cpu_hog` | `pyod_lof` | 8 | 0.375 | 180s | 216s |
+| `cpu_hog` | `cpu_hog` | `pyod_knn` | 8 | 0.000 | n/a | n/a |
+| `cpu_hog` | `intermittent` | `threshold` | 25 | 0.840 | 40s | 40s |
+| `cpu_hog` | `intermittent` | `iforest` | 25 | 0.680 | 40s | 40s |
+| `cpu_hog` | `intermittent` | `pyod_ecod` | 25 | 0.400 | 40s | 40s |
+| `cpu_hog` | `intermittent` | `pyod_copod` | 25 | 0.440 | 40s | 40s |
+| `cpu_hog` | `intermittent` | `pyod_hbos` | 25 | 0.080 | 160s | 214s |
+| `cpu_hog` | `intermittent` | `pyod_lof` | 25 | 0.120 | 40s | 58s |
+| `cpu_hog` | `intermittent` | `pyod_knn` | 25 | 0.000 | n/a | n/a |
+| `cpu_ramp` | `gradual_ramp` | `threshold` | 5 | 0.800 | 160s | 160s |
+| `cpu_ramp` | `gradual_ramp` | `iforest` | 5 | 1.000 | 240s | 448s |
+| `cpu_ramp` | `gradual_ramp` | `pyod_ecod` | 5 | 0.600 | 200s | 236s |
+| `cpu_ramp` | `gradual_ramp` | `pyod_copod` | 5 | 0.800 | 140s | 245s |
+| `cpu_ramp` | `gradual_ramp` | `pyod_hbos` | 5 | 0.000 | n/a | n/a |
+| `cpu_ramp` | `gradual_ramp` | `pyod_lof` | 5 | 0.200 | 420s | 420s |
+| `cpu_ramp` | `gradual_ramp` | `pyod_knn` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `small_step` | `threshold` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `small_step` | `iforest` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `small_step` | `pyod_ecod` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `small_step` | `pyod_copod` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `small_step` | `pyod_hbos` | 5 | 0.000 | n/a | n/a |
+| `cpu_step_small` | `small_step` | `pyod_lof` | 5 | 0.200 | 200s | 200s |
+| `cpu_step_small` | `small_step` | `pyod_knn` | 5 | 0.000 | n/a | n/a |
+| `latency` | `latency` | `threshold` | 7 | 0.857 | 40s | 40s |
+| `latency` | `latency` | `iforest` | 7 | 0.857 | 40s | 40s |
+| `latency` | `latency` | `pyod_ecod` | 7 | 0.857 | 40s | 40s |
+| `latency` | `latency` | `pyod_copod` | 7 | 0.857 | 40s | 40s |
+| `latency` | `latency` | `pyod_hbos` | 7 | 0.857 | 40s | 40s |
+| `latency` | `latency` | `pyod_lof` | 7 | 0.143 | 320s | 320s |
+| `latency` | `latency` | `pyod_knn` | 7 | 0.143 | 320s | 320s |
+| `pause` | `pause` | `threshold` | 6 | 1.000 | 40s | 40s |
+| `pause` | `pause` | `iforest` | 6 | 1.000 | 40s | 40s |
+| `pause` | `pause` | `pyod_ecod` | 6 | 1.000 | 40s | 40s |
+| `pause` | `pause` | `pyod_copod` | 6 | 1.000 | 40s | 40s |
+| `pause` | `pause` | `pyod_hbos` | 6 | 1.000 | 40s | 40s |
+| `pause` | `pause` | `pyod_lof` | 6 | 1.000 | 70s | 185s |
+| `pause` | `pause` | `pyod_knn` | 6 | 0.333 | 40s | 40s |
+| `region_down` | `region_down` | `threshold` | 14 | 1.000 | 40s | 40s |
+| `region_down` | `region_down` | `iforest` | 14 | 1.000 | 40s | 40s |
+| `region_down` | `region_down` | `pyod_ecod` | 14 | 1.000 | 40s | 40s |
+| `region_down` | `region_down` | `pyod_copod` | 14 | 1.000 | 40s | 40s |
+| `region_down` | `region_down` | `pyod_hbos` | 14 | 1.000 | 40s | 40s |
+| `region_down` | `region_down` | `pyod_lof` | 14 | 1.000 | 40s | 194s |
+| `region_down` | `region_down` | `pyod_knn` | 14 | 0.786 | 40s | 330s |
+| `stop` | `stop` | `threshold` | 5 | 1.000 | 40s | 40s |
+| `stop` | `stop` | `iforest` | 5 | 1.000 | 40s | 40s |
+| `stop` | `stop` | `pyod_ecod` | 5 | 1.000 | 40s | 40s |
+| `stop` | `stop` | `pyod_copod` | 5 | 1.000 | 40s | 40s |
+| `stop` | `stop` | `pyod_hbos` | 5 | 1.000 | 40s | 40s |
+| `stop` | `stop` | `pyod_lof` | 5 | 1.000 | 120s | 208s |
+| `stop` | `stop` | `pyod_knn` | 5 | 0.200 | 40s | 40s |
 
 Episodes missed by **both** detectors (deduplicated by episode id, unlike the table above):
 
