@@ -40,6 +40,9 @@ Episodes missed by **both** detectors (deduplicated by episode id, unlike the ta
 | `threshold` | 5 (71%) | 0 (0%) | 2 (29%) | 0 (0%) | 7 |
 | `iforest` | 38 (7%) | 0 (0%) | 511 (93%) | 0 (0%) | 549 |
 
+- `threshold`: 7 false alarm(s) total -- 5 in `normal`, 2 in `recovery`.
+- `iforest`: 549 false alarm(s) total -- 38 in `normal`, 511 in `recovery`.
+
 ## c) Intermittent bursts vs the hysteresis floor
 
 `3` consecutive breaches are required to detect anything, so a burst shorter than that many collector steps is structurally undetectable regardless of score; a burst of exactly `3` steps has no slack at all -- every single step of it must breach, or the burst is missed.
@@ -73,3 +76,30 @@ Episodes missed by **both** detectors (deduplicated by episode id, unlike the ta
 | 429 | 60s | 3.0 | at_floor | `threshold`, `iforest` |
 
 0 burst(s) below the floor (structurally uncatchable); 25 at the floor, of which 23 were actually caught (zero tolerance for a missed step within the burst); 0 above the floor with at least one step of slack.
+
+## d) Episode-level view
+
+`occurrences`/`detected` are resource-occurrence counts (same convention as section a), summed across fault types.
+
+| Detector | Fault occurrences | Detected | Share detected |
+| --- | --- | --- | --- |
+| `threshold` | 75 | 64 | 0.853 |
+| `iforest` | 75 | 61 | 0.813 |
+
+Of all missed (false-negative) windows, how many sit in the first `2` true-label windows of a fault at their resource -- unavoidable under the 3-consecutive-breach rule, since no alarm can fire before the counter reaches the gate -- versus a later window, which the detector had a real chance at:
+
+| Detector | Missed windows | Unavoidable (first 2) | Later |
+| --- | --- | --- | --- |
+| `threshold` | 281 | 150 | 131 |
+| `iforest` | 295 | 150 | 145 |
+
+## e) Recovery-excluded sensitivity analysis
+
+> Post-hoc sensitivity analysis. Not the Gate B metric. Recovery windows are labelled normal in the official evaluation; this view excludes them to show where false alarms come from.
+
+| Detector | View | Precision | Recall | F1 | FPR |
+| --- | --- | --- | --- | --- | --- |
+| `threshold` | official | 0.990 | 0.719 | 0.833 | 0.000 |
+| `threshold` | excl. recovery | 0.993 | 0.719 | 0.834 | 0.000 |
+| `iforest` | official | 0.562 | 0.705 | 0.625 | 0.006 |
+| `iforest` | excl. recovery | 0.949 | 0.705 | 0.809 | 0.000 |

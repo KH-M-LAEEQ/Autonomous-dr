@@ -153,6 +153,123 @@ def analyze_fault_types(
     return stats, seen_ids, detected_ids
 
 
+@dataclass
+class _EpisodeLevelStats:
+    """Totals across every fault type for one detector -- occurrence-counted,
+    same convention as `_FaultTypeStats` (a `region_down` episode hitting 2
+    resources counts twice), so these reconcile with the per-fault-type table
+    and with `results-v6.md`'s `n_episodes`."""
+
+    occurrences: int = 0
+    detected: int = 0
+
+
+def analyze_episode_level(
+    fault_type_stats: dict[str, dict[str, _FaultTypeStats]],
+) -> dict[str, _EpisodeLevelStats]:
+    """Collapses `analyze_fault_types`'s per-fault-type table across fault
+    types, per detector -- the overall share of fault occurrences caught at
+    all, independent of which fault type they were."""
+    out: dict[str, _EpisodeLevelStats] = {}
+    for detector in DETECTORS:
+        occurrences = sum(
+            per_detector[detector].episodes
+            for per_detector in fault_type_stats.values()
+            if detector in per_detector
+        )
+        detected = sum(
+            per_detector[detector].detected
+            for per_detector in fault_type_stats.values()
+            if detector in per_detector
+        )
+        out[detector] = _EpisodeLevelStats(occurrences, detected)
+    return out
+
+
+@dataclass
+class _MissedWindowStats:
+    """Missed (false-negative) windows split by whether an alarm was even
+    possible yet. The first `CONSECUTIVE_BREACHES_REQUIRED - 1` true-label
+    windows of a fault, at a given resource, cannot produce an alarm no
+    matter how obviously anomalous they are -- the consecutive-breach counter
+    has not reached the gate yet. Missing one of those is a property of the
+    hysteresis rule, not of the detector; a miss on a later window is not."""
+
+    unavoidable: int = 0
+    later: int = 0
+
+
+def missed_window_split(rows: list[_Row]) -> _MissedWindowStats:
+    """Buckets one detector's missed windows by position within the fault at
+    its resource (episode numbering is global across resources -- a
+    `region_down` episode is one id shared by several resources, each with
+    its own detector instance and its own hysteresis state -- so position is
+    computed per (resource, episode), not per episode id alone)."""
+    unavoidable_positions = CONSECUTIVE_BREACHES_REQUIRED - 1
+    by_group: dict[tuple[str, int], list[_Row]] = defaultdict(list)
+    for row in rows:
+        if row.true_label and row.episode is not None:
+            by_group[(row.resource_id, row.episode)].append(row)
+
+    stats = _MissedWindowStats()
+    for group_rows in by_group.values():
+        for position, row in enumerate(sorted(group_rows, key=lambda r: r.timestamp)):
+            if row.breach:
+                continue
+            if position < unavoidable_positions:
+                stats.unavoidable += 1
+            else:
+                stats.later += 1
+    return stats
+
+
+@dataclass(frozen=True)
+class _ConfusionCounts:
+    tp: int = 0
+    fp: int = 0
+    tn: int = 0
+    fn: int = 0
+
+
+def _confusion(rows: list[_Row]) -> _ConfusionCounts:
+    tp = fp = tn = fn = 0
+    for row in rows:
+        if row.true_label and row.breach:
+            tp += 1
+        elif row.true_label and not row.breach:
+            fn += 1
+        elif not row.true_label and row.breach:
+            fp += 1
+        else:
+            tn += 1
+    return _ConfusionCounts(tp, fp, tn, fn)
+
+
+def _prf(c: _ConfusionCounts) -> tuple[float, float, float, float]:
+    precision = c.tp / (c.tp + c.fp) if (c.tp + c.fp) else 0.0
+    recall = c.tp / (c.tp + c.fn) if (c.tp + c.fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    fpr = c.fp / (c.fp + c.tn) if (c.fp + c.tn) else 0.0
+    return precision, recall, f1, fpr
+
+
+def recovery_excluded_sensitivity(
+    predictions: dict[str, list[_Row]],
+) -> dict[str, tuple[_ConfusionCounts, _ConfusionCounts]]:
+    """Official window-level confusion counts vs the same counts with
+    recovery-phase windows dropped from scoring entirely. Recovery windows
+    are ground-truth normal in the official evaluation (the fault has
+    already ended), so this only ever removes potential false positives --
+    recall is unaffected by construction. Post-hoc, not the Gate B metric:
+    see the label on this section in the rendered output."""
+    out: dict[str, tuple[_ConfusionCounts, _ConfusionCounts]] = {}
+    for detector, rows in predictions.items():
+        official = _confusion(rows)
+        excl_recovery = _confusion([r for r in rows if r.phase != "recovery"])
+        out[detector] = (official, excl_recovery)
+    return out
+
+
 def false_alarms_by_phase(rows: list[_Row]) -> dict[str, int]:
     """False alarms (breach on a ground-truth-normal window) split by which
     part of the episode cycle they landed in. `ramp`/`fault` cannot appear
@@ -232,6 +349,9 @@ def render_markdown(
     missed_by_both: dict[str, int],
     phase_counts: dict[str, dict[str, int]],
     burst_rows: list[_BurstFloorRow],
+    episode_level: dict[str, _EpisodeLevelStats],
+    missed_window_stats: dict[str, _MissedWindowStats],
+    sensitivity: dict[str, tuple[_ConfusionCounts, _ConfusionCounts]],
 ) -> str:
     lines = [
         f"# Per-fault-type and per-phase breakdown -- `{dataset_version}`",
@@ -292,6 +412,15 @@ def render_markdown(
         )
         lines.append(f"| `{detector}` | {cells} | {total} |")
 
+    lines += [""]
+    for detector in DETECTORS:
+        counts = phase_counts.get(detector, dict.fromkeys(PHASES, 0))
+        total = sum(counts.values())
+        lines.append(
+            f"- `{detector}`: {total} false alarm(s) total -- "
+            f"{counts['normal']} in `normal`, {counts['recovery']} in `recovery`."
+        )
+
     lines += [
         "",
         "## c) Intermittent bursts vs the hysteresis floor",
@@ -323,7 +452,65 @@ def render_markdown(
         f"{sum(1 for r in burst_rows if r.bucket == 'above_floor')} above the "
         "floor with at least one step of slack.",
         "",
+        "## d) Episode-level view",
+        "",
+        "`occurrences`/`detected` are resource-occurrence counts (same "
+        "convention as section a), summed across fault types.",
+        "",
+        "| Detector | Fault occurrences | Detected | Share detected |",
+        "| --- | --- | --- | --- |",
     ]
+    for detector in DETECTORS:
+        episode_stats = episode_level.get(detector, _EpisodeLevelStats())
+        share = (
+            episode_stats.detected / episode_stats.occurrences
+            if episode_stats.occurrences
+            else float("nan")
+        )
+        lines.append(
+            f"| `{detector}` | {episode_stats.occurrences} | {episode_stats.detected} "
+            f"| {_fmt(share)} |"
+        )
+
+    lines += [
+        "",
+        f"Of all missed (false-negative) windows, how many sit in the first "
+        f"`{CONSECUTIVE_BREACHES_REQUIRED - 1}` true-label windows of a fault at "
+        "their resource -- unavoidable under the 3-consecutive-breach rule, since "
+        "no alarm can fire before the counter reaches the gate -- versus a later "
+        "window, which the detector had a real chance at:",
+        "",
+        "| Detector | Missed windows | Unavoidable (first "
+        f"{CONSECUTIVE_BREACHES_REQUIRED - 1}) | Later |",
+        "| --- | --- | --- | --- |",
+    ]
+    for detector in DETECTORS:
+        m = missed_window_stats.get(detector, _MissedWindowStats())
+        total = m.unavoidable + m.later
+        lines.append(f"| `{detector}` | {total} | {m.unavoidable} | {m.later} |")
+
+    lines += [
+        "",
+        "## e) Recovery-excluded sensitivity analysis",
+        "",
+        "> Post-hoc sensitivity analysis. Not the Gate B metric. Recovery "
+        "windows are labelled normal in the official evaluation; this view "
+        "excludes them to show where false alarms come from.",
+        "",
+        "| Detector | View | Precision | Recall | F1 | FPR |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for detector in DETECTORS:
+        official, excl_recovery = sensitivity.get(
+            detector, (_ConfusionCounts(), _ConfusionCounts())
+        )
+        for label, confusion in (("official", official), ("excl. recovery", excl_recovery)):
+            precision, recall, f1, fpr = _prf(confusion)
+            lines.append(
+                f"| `{detector}` | {label} | {_fmt(precision)} | {_fmt(recall)} "
+                f"| {_fmt(f1)} | {_fmt(fpr)} |"
+            )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -359,8 +546,19 @@ def run(dataset_version: str, root: Path, detectors: tuple[str, ...]) -> str:
         episode_meta, ground_truth_ids, detected_ids, step_seconds
     )
 
+    episode_level = analyze_episode_level(fault_type_stats)
+    missed_window_stats = {d: missed_window_split(rows) for d, rows in predictions.items()}
+    sensitivity = recovery_excluded_sensitivity(predictions)
+
     return render_markdown(
-        dataset_version, fault_type_stats, dict(missed_by_both), phase_counts, burst_rows
+        dataset_version,
+        fault_type_stats,
+        dict(missed_by_both),
+        phase_counts,
+        burst_rows,
+        episode_level,
+        missed_window_stats,
+        sensitivity,
     )
 
 
