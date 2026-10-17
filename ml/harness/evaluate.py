@@ -49,7 +49,7 @@ attributed to it, not stolen by whatever comes next.** `_score_resource` calls
 interface) at the first window strictly inside a new episode, and
 `_grace_fault_at` lets a lingering breach just after a fault's labelled end
 still count toward that fault rather than toward the next one. Both exist
-because the Isolation Forest row of `docs/results/practice-run.md` reported a
+because the Isolation Forest row of `docs/results/results-v5.md` reported a
 0s detection delay on `intermittent`'s back-to-back bursts: a breach streak
 from one burst's rolling-window tail only needed one more breach on the next
 burst's very first window to "detect" it instantly. See that doc's
@@ -62,10 +62,11 @@ import argparse
 import json
 import math
 from collections.abc import Iterator
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from core.models.domain import MetricWindow
 from ml.detectors import build
@@ -262,7 +263,7 @@ def _grace_fault_at(
     whatever happens to be active when the 3rd consecutive breach lands --
     which, for `intermittent`'s back-to-back bursts, is usually the *next*
     episode, reported as a detection delay of 0s. See
-    `docs/results/practice-run.md`, "zero-second detection delays".
+    `docs/results/results-v5.md`, "zero-second detection delays".
     """
     if grace <= timedelta(0):
         return None
@@ -270,6 +271,31 @@ def _grace_fault_at(
     if not candidates:
         return None
     return max(candidates, key=lambda i: i.end)
+
+
+def _phase_of(
+    fault: FaultInterval | None,
+    window: MetricWindow,
+    intervals: list[FaultInterval],
+    recover: timedelta,
+) -> str:
+    """Which part of an episode's lifecycle this window sits in, for the
+    opt-in prediction export only -- never consulted by the tally above.
+
+    `fault` is `_fault_at(window, intervals)`, passed in rather than
+    recomputed. `gradual_ramp` gets its own label because the whole point of
+    that shape is a detector that only trips on extremes being LATE across
+    it (see `_run_ramp` in `ml/datasets/make_episodes.py`); lumping it in
+    with `fault` would hide that in the breakdown. `recovery` mirrors
+    `_grace_fault_at`'s shape but uses the dataset's actual `recover_minutes`
+    (from the manifest) rather than one window-span's grace -- a wider,
+    label-only window with no effect on detection crediting.
+    """
+    if fault is not None:
+        return "ramp" if fault.shape == "gradual_ramp" else "fault"
+    if recover > timedelta(0) and any(i.end <= window.end < i.end + recover for i in intervals):
+        return "recovery"
+    return "normal"
 
 
 @dataclass
@@ -294,6 +320,8 @@ def _score_resource(
     intervals: list[FaultInterval],
     tally: _Tally,
     detector_kwargs: dict[str, Any],
+    predictions_out: IO[str] | None = None,
+    recover: timedelta = timedelta(0),
 ) -> None:
     """Fit on this resource's normal train windows, score its test windows.
 
@@ -306,7 +334,7 @@ def _score_resource(
     only needs one more breach to "detect" N+1 instantly, reporting a delay
     near 0s that measures carried-over state, not how fast the detector
     actually responded to this fault. See
-    `docs/results/practice-run.md`, "zero-second detection delays".
+    `docs/results/results-v5.md`, "zero-second detection delays".
     """
     if len(windows) < 10:
         return
@@ -382,6 +410,29 @@ def _score_resource(
             ):
                 first_alarm[credited.episode] = window.end
 
+        if predictions_out is not None:
+            # Export only -- read, never consulted by the tally above, so
+            # turning it on cannot change a single number in `EvalResult`.
+            score_value = (
+                batch_scores[index] if batch_scores is not None else detector.score(window)
+            )
+            predictions_out.write(
+                json.dumps(
+                    {
+                        "resource_id": window.resource_id,
+                        "episode": fault.episode if fault is not None else None,
+                        "fault_type": fault.fault_type if fault is not None else None,
+                        "shape": fault.shape if fault is not None else None,
+                        "phase": _phase_of(fault, window, intervals, recover),
+                        "timestamp": window.end.isoformat(),
+                        "true_label": fault is not None,
+                        "breach": bool(predicted),
+                        "score": float(score_value),
+                    }
+                )
+                + "\n"
+            )
+
     by_episode = {i.episode: i for i in intervals}
     tally.episodes_in_test += len(episodes_seen)
     tally.episodes_detected += len(first_alarm)
@@ -400,6 +451,7 @@ def evaluate(
     detector_name: str,
     dataset_version: str = "v1",
     root: Path = DEFAULT_DATASET_ROOT,
+    save_predictions: bool = False,
     **detector_kwargs: Any,
 ) -> EvalResult:
     """Score one detector on one dataset version.
@@ -408,20 +460,39 @@ def evaluate(
     each, per the `AnomalyDetector` contract), then the window counts are pooled
     into a single set of metrics and the per-episode delays into one
     distribution.
+
+    `save_predictions` is opt-in and off by default: when on, one row per
+    TEST-slice window is appended to `<dataset>/predictions-<detector>.jsonl`
+    (diagnosis only -- see `ml/harness/breakdown.py`). It is pure export: the
+    tally loop in `_score_resource` never reads it back, so turning it on
+    cannot change a single number in the returned `EvalResult`.
     """
     manifest = load_manifest(dataset_version, root)
     intervals_by_resource = load_fault_intervals(dataset_version, root)
+    recover = timedelta(minutes=float(manifest.get("schedule", {}).get("recover_minutes", 0.0)))
 
     tally = _Tally()
-    for resource_id in manifest["resources"]:
-        windows = load_windows_for_resource(dataset_version, resource_id, root)
-        _score_resource(
-            detector_name,
-            windows,
-            intervals_by_resource.get(resource_id, []),
-            tally,
-            detector_kwargs,
-        )
+    with ExitStack() as stack:
+        predictions_out: IO[str] | None = None
+        if save_predictions:
+            predictions_path = (
+                dataset_dir(dataset_version, root) / f"predictions-{detector_name}.jsonl"
+            )
+            predictions_out = stack.enter_context(
+                predictions_path.open("w", encoding="utf-8", newline="\n")
+            )
+
+        for resource_id in manifest["resources"]:
+            windows = load_windows_for_resource(dataset_version, resource_id, root)
+            _score_resource(
+                detector_name,
+                windows,
+                intervals_by_resource.get(resource_id, []),
+                tally,
+                detector_kwargs,
+                predictions_out=predictions_out,
+                recover=recover,
+            )
 
     precision = tally.tp / (tally.tp + tally.fp) if (tally.tp + tally.fp) else 0.0
     recall = tally.tp / (tally.tp + tally.fn) if (tally.tp + tally.fn) else 0.0
@@ -693,7 +764,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--detectors", nargs="+", default=["threshold_unscaled", "threshold", "iforest"]
     )
-    parser.add_argument("--out", type=Path, default=Path("docs/results/practice-run.md"))
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="defaults to docs/results/results-<dataset-version>.md",
+    )
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument(
         "--render-from",
@@ -703,7 +779,16 @@ def main(argv: list[str] | None = None) -> int:
         "re-scoring. Scoring reads the whole window file once per resource per "
         "detector, so this is the cheap path when only the prose changed.",
     )
+    parser.add_argument(
+        "--save-predictions",
+        action="store_true",
+        help="also write one row per TEST-slice window to "
+        "<dataset-root>/<dataset-version>/predictions-<detector>.jsonl, for "
+        "ml/harness/breakdown.py. Off by default; does not affect the metrics.",
+    )
     args = parser.parse_args(argv)
+    if args.out is None:
+        args.out = Path(f"docs/results/results-{args.dataset_version}.md")
 
     manifest = load_manifest(args.dataset_version, args.dataset_root)
     results: list[EvalResult] = []
@@ -714,7 +799,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         for name in args.detectors:
             print(f"scoring {name} on {args.dataset_version} ...", flush=True)
-            result = evaluate(name, args.dataset_version, args.dataset_root)
+            result = evaluate(
+                name,
+                args.dataset_version,
+                args.dataset_root,
+                save_predictions=args.save_predictions,
+            )
             results.append(result)
             print(
                 f"  precision={result.precision:.3f} recall={result.recall:.3f} "

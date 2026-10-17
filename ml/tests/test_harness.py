@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -453,3 +454,85 @@ def test_breach_before_fault_start_is_a_false_alarm_not_a_catch(
     assert result.extra["episodes_detected"] == 1
     assert result.extra["delay_samples"] == 1
     assert result.detection_delay_p50_s == pytest.approx(20.0)
+
+
+def test_save_predictions_flag_off_leaves_metrics_identical(tmp_path: Path) -> None:
+    """The opt-in prediction export must be pure write: toggling it on cannot
+    change a single number in the returned `EvalResult`, and leaving it off
+    (the default) must not create the predictions file at all."""
+    _write_dataset(tmp_path, ["r1", "r2"])
+
+    without = evaluate("threshold", "vtest", tmp_path)
+    assert not (tmp_path / "vtest" / "predictions-threshold.jsonl").exists()
+
+    with_export = evaluate("threshold", "vtest", tmp_path, save_predictions=True)
+    assert asdict(without) == asdict(with_export)
+
+
+def test_save_predictions_writes_one_row_per_test_window(tmp_path: Path) -> None:
+    _write_dataset(tmp_path, ["r1", "r2"])
+    result = evaluate("threshold", "vtest", tmp_path, save_predictions=True)
+
+    predictions_path = tmp_path / "vtest" / "predictions-threshold.jsonl"
+    rows = [json.loads(line) for line in predictions_path.read_text().splitlines() if line.strip()]
+    assert len(rows) == result.extra["test_windows"]
+    for row in rows:
+        assert set(row) == {
+            "resource_id",
+            "episode",
+            "fault_type",
+            "shape",
+            "phase",
+            "timestamp",
+            "true_label",
+            "breach",
+            "score",
+        }
+        assert row["phase"] in {"normal", "ramp", "fault", "recovery"}
+    assert any(row["true_label"] for row in rows)
+    assert any(not row["true_label"] for row in rows)
+
+
+def test_main_writes_a_separate_results_file_per_dataset_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Scoring two dataset versions back to back must not let the second
+    run's `--out` clobber the first's -- each version's results land in its
+    own file, named after that version."""
+    dataset_root = tmp_path / "datasets"
+    _write_dataset(dataset_root, ["r1"])
+    manifest_path = dataset_root / "vtest" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update(
+        {
+            "episode_count": 1,
+            "window_count": 60,
+            "metric_list_version": {"count": 1, "sha256": "test"},
+            "virtual_clock": {"step_seconds": 10},
+            "window_samples": 12,
+            "created": "2026-01-01",
+            "generator": "ml/datasets/make_episodes.py",
+            "generator_commit": "0" * 40,
+            "fault_store": "memory",
+            "fault_type_distribution": {"region_down": 1},
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    shutil.copytree(dataset_root / "vtest", dataset_root / "vtest2")
+    manifest2_path = dataset_root / "vtest2" / "manifest.json"
+    manifest2 = json.loads(manifest2_path.read_text())
+    manifest2["version"] = "vtest2"
+    manifest2_path.write_text(json.dumps(manifest2), encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    common_args = ["--dataset-root", str(dataset_root), "--detectors", "threshold"]
+    evaluate_module.main(["--dataset-version", "vtest", *common_args])
+    evaluate_module.main(["--dataset-version", "vtest2", *common_args])
+
+    out_v1 = tmp_path / "docs" / "results" / "results-vtest.md"
+    out_v2 = tmp_path / "docs" / "results" / "results-vtest2.md"
+    assert out_v1.exists()
+    assert out_v2.exists()
+    assert "`vtest`" in out_v1.read_text()
+    assert "`vtest2`" in out_v2.read_text()

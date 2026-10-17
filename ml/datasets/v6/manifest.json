@@ -1,0 +1,86 @@
+{
+  "version": "v6",
+  "seed": 42,
+  "simulator_version": 3,
+  "metric_list_version": {
+    "source": "core.signals.ALL_COLLECTED_SIGNALS",
+    "spec": "docs/metric-schema.md",
+    "canonical_count": 20,
+    "reserve_count": 5,
+    "count": 25,
+    "sha256": "7fad93b7e4f8cbd3"
+  },
+  "created": "2026-10-17",
+  "episode_count": 432,
+  "scheduled_episode_count": 300,
+  "window_count": 590712,
+  "shapes_used": [
+    "cpu_hog",
+    "gradual_ramp",
+    "intermittent",
+    "latency",
+    "pause",
+    "region_down",
+    "small_step",
+    "stop"
+  ],
+  "shape_distribution": {
+    "cpu_hog": 50,
+    "gradual_ramp": 33,
+    "intermittent": 165,
+    "latency": 50,
+    "pause": 34,
+    "region_down": 33,
+    "small_step": 33,
+    "stop": 34
+  },
+  "shape_schedule": {
+    "ramp_minutes": 10.0,
+    "small_step_seconds": 300,
+    "intermittent_on_minutes": 1.0,
+    "intermittent_off_minutes": 1.0,
+    "intermittent_total_minutes": 10.0,
+    "policy": "round_robin_shuffled_per_virtual_day",
+    "episodes_per_virtual_day": 18
+  },
+  "generator": "ml/datasets/make_episodes.py",
+  "generator_commit": "f241d2fbe5b9a2c868cbf43477c0643719775f05",
+  "fault_store": "memory",
+  "virtual_clock": {
+    "start": "2026-01-01T00:00:00+00:00",
+    "end": "2026-01-18T02:16:40+00:00",
+    "step_seconds": 20
+  },
+  "window_samples": 12,
+  "schedule": {
+    "normal_minutes": 65.0,
+    "fault_seconds_min": 180,
+    "fault_seconds_max": 600,
+    "recover_minutes": 10.0
+  },
+  "fault_type_distribution": {
+    "cpu_hog": 215,
+    "cpu_ramp": 33,
+    "cpu_step_small": 33,
+    "latency": 50,
+    "pause": 34,
+    "region_down": 33,
+    "stop": 34
+  },
+  "resources": [
+    "sim-cache-1",
+    "sim-db-1",
+    "sim-db-2",
+    "sim-lb-1",
+    "sim-web-1",
+    "sim-web-2",
+    "sim-web-3",
+    "sim-worker-1"
+  ],
+  "notes": [
+    "Simulator data. Practice only -- not thesis material.",
+    "Fault windows are bounded by clear_fault, not by the Redis TTL.",
+    "region_down labels list every affected resource, not just the target.",
+    "Telemetry is reproducible from `seed` alone, given the same metric list."
+  ]
+}

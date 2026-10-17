@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fault episode ground truth",
+  "description": "One row per injected fault. `start`/`end` are the exact virtual-clock bounds of the fault window. A window overlapping [start, end) for a resource listed in `affected` is anomalous; everything else is normal.",
+  "type": "object",
+  "required": [
+    "episode",
+    "shape",
+    "fault_type",
+    "target",
+    "affected",
+    "start",
+    "end"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "episode": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "unique per label row across the dataset -- what the harness keys detection delay on. An `intermittent` episode emits one row per ON burst, so these do not map 1:1 onto scheduled_episode."
+    },
+    "scheduled_episode": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "index of the generator's episode loop that produced this row"
+    },
+    "shape": {
+      "type": "string",
+      "description": "how the fault was driven over time"
+    },
+    "burst": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0 for single-span shapes; the ON-burst index for intermittent"
+    },
+    "fault_type": {
+      "type": "string",
+      "enum": [
+        "cpu_hog",
+        "latency",
+        "stop",
+        "pause",
+        "region_down",
+        "cpu_ramp",
+        "cpu_step_small"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "description": "resource the fault was injected against"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "region": {
+      "type": "string"
+    },
+    "affected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "every resource degraded by this fault, including `target`"
+    },
+    "start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_seconds": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}
