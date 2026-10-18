@@ -82,3 +82,20 @@ never reset by `reset()`, only hysteresis is, matching every other detector)
 have no such history and are scored `0.0` / not anomalous by construction,
 not by falling through the IQR fence. This is stated in `lstm.py`'s
 docstring, not just here.
+
+## Outcome (v6, seed 42)
+
+F1 0.511 against threshold's 0.833 -- a 0.322 gap, nowhere near the 0.05
+margin the 5-seed robustness check required, so that check did not run.
+False alarms: 420 in normal-phase windows, 667 in recovery, both well above
+threshold's and iforest's counts.
+
+Early stopping never fired on any of the 8 v6 resources -- all trained the
+full 20 epochs. A per-epoch loss trace on two of them (`sim-web-1`,
+`sim-db-1`) shows why: validation loss was still falling at epoch 20 for
+both, so patience-3 never got a chance to trigger. Looks like under-training
+against the 20-epoch cap, not a broken branch -- a dedicated unit test now
+confirms patience-3 does fire once validation loss actually stalls.
+
+Limitation of the fixed design, recorded, not a reason to change it: every
+setting above was fixed before these results and stays fixed after them.
