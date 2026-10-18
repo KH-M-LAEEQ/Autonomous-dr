@@ -26,7 +26,12 @@ from torch import nn
 from core.interfaces.anomaly_detector import AnomalyDetector
 from core.models.domain import MetricWindow
 from ml.detectors import register
-from ml.detectors.threshold import CONSECUTIVE_BREACHES_REQUIRED, IQR_MULTIPLIER, _percentile
+from ml.detectors.threshold import (
+    CONSECUTIVE_BREACHES_REQUIRED,
+    IQR_MULTIPLIER,
+    SCALE_FLOORS,
+    _percentile,
+)
 from ml.detectors.window_features import WindowVectorizer
 
 HISTORY_LENGTH = 6
@@ -83,7 +88,11 @@ class LSTMDetector(AnomalyDetector):
     # of the interface, same as `ThresholdDetector`/`IsolationForestDetector`.
     decision_threshold: float = 0.5
 
-    def __init__(self, consecutive_breaches_required: int = CONSECUTIVE_BREACHES_REQUIRED) -> None:
+    def __init__(
+        self,
+        consecutive_breaches_required: int = CONSECUTIVE_BREACHES_REQUIRED,
+        use_scale_floor: bool = False,
+    ) -> None:
         self._vectorizer = WindowVectorizer(use_time_of_day=False)
         self._median: list[float] = []
         self._spread: list[float] = []
@@ -93,6 +102,9 @@ class LSTMDetector(AnomalyDetector):
         self._required = consecutive_breaches_required
         self._last_explain: dict[str, Any] = {}
         self._fitted = False
+        #: Opt-in, off by default -- see `threshold.SCALE_FLOORS` and
+        #: `docs/notes/scale-floor-v2.md`. `lstm_v2` turns this on.
+        self._use_scale_floor = use_scale_floor
         #: Duck-typed, like `reset()`: how many epochs the last `fit()` call
         #: actually ran before early stopping (or `MAX_EPOCHS`, if it never
         #: triggered). Not part of the frozen `AnomalyDetector` interface.
@@ -152,12 +164,22 @@ class LSTMDetector(AnomalyDetector):
             self._median.append(median)
             iqr = q3 - q1
             if iqr > 0:
-                self._spread.append(iqr)
+                spread = iqr
             else:
                 # Constant in training. Fall back to its own magnitude, same
                 # rule as `ThresholdDetector.fit`.
                 magnitude = abs(median)
-                self._spread.append(magnitude if magnitude > 0 else 1.0)
+                spread = magnitude if magnitude > 0 else 1.0
+            if self._use_scale_floor:
+                # 3 features per signal (mean/std/last), in `self._vectorizer.
+                # signals` order -- `use_time_of_day=False` always on this
+                # detector, so `dim == 3 * len(signals)` with no extra columns
+                # to misattribute.
+                signal = self._vectorizer.signals[column // 3]
+                floor = SCALE_FLOORS.get(signal)
+                if floor is not None:
+                    spread = max(spread, floor)
+            self._spread.append(spread)
 
         train_vectors = [self._scaled_vector(w) for w in X]
         train_data = _sliding_sequences(train_vectors)
@@ -298,3 +320,19 @@ class LSTMDetector(AnomalyDetector):
         """
         self._consecutive_breaches = 0
         self._last_explain = {}
+
+
+@register("lstm_v2")
+class FloorScaledLSTMDetector(LSTMDetector):
+    """`LSTMDetector` with the v2 scaling floor always on
+    (`docs/notes/scale-floor-v2.md`) -- the opt-in flag lives on the base
+    class; this just defaults it on so the harness can select it by name,
+    same pattern as `threshold_v2` in `ml/detectors/threshold.py`."""
+
+    name = "lstm_v2"
+
+    def __init__(self, consecutive_breaches_required: int = CONSECUTIVE_BREACHES_REQUIRED) -> None:
+        super().__init__(
+            consecutive_breaches_required=consecutive_breaches_required,
+            use_scale_floor=True,
+        )
