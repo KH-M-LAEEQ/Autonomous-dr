@@ -258,6 +258,49 @@ def test_evaluate_trains_only_on_normal_windows(tmp_path: Path) -> None:
     assert result.extra["train_windows"] == len(windows[train_slice])
 
 
+def test_fit_receives_fault_free_validation_windows_from_the_val_slice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`AnomalyDetector.fit`'s `X_val` must be the same 15% validation slice
+    `time_based_split` carves out, filtered to fault-free windows the same way
+    as train -- not empty, not the test slice, and not left unfiltered."""
+    captured: dict[str, list[MetricWindow] | None] = {}
+
+    class _FitSpy(AnomalyDetector):
+        name = "fit_spy"
+        requires_training = True
+
+        def fit(self, X: list[MetricWindow], X_val: list[MetricWindow] | None = None) -> None:
+            captured["X_val"] = X_val
+
+        def score(self, window: MetricWindow) -> float:
+            return 0.0
+
+        def explain(self) -> dict[str, object]:
+            return {}
+
+        def is_anomaly(self, window: MetricWindow) -> bool:
+            return False
+
+    monkeypatch.setattr(evaluate_module, "build", lambda name, **kwargs: _FitSpy())
+    # The fault (ticks 75-78) sits inside the val slice (70-85), so a correct
+    # filter must drop it; an unfiltered val slice would hand the detector
+    # fault-contaminated windows.
+    _write_scripted_dataset(tmp_path, "vfitspy", intervals=[(0, 75, 78)], n_total=100)
+    evaluate_module.evaluate("fit_spy", "vfitspy", tmp_path)
+
+    windows = load_windows_for_resource("vfitspy", "r1", tmp_path)
+    intervals = load_fault_intervals("vfitspy", tmp_path)["r1"]
+    _, val_slice, _ = time_based_split(len(windows))
+    assert val_slice == slice(70, 85)
+    expected = [w for w in windows[val_slice] if _fault_at(w, intervals) is None]
+
+    assert captured["X_val"]
+    assert len(captured["X_val"]) < len(windows[val_slice])
+    assert captured["X_val"] == expected
+    assert all(_fault_at(w, intervals) is None for w in captured["X_val"])
+
+
 def test_batch_scoring_produces_identical_results_to_per_window_scoring(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

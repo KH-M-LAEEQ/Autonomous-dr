@@ -39,9 +39,10 @@ resource's history at the cost of re-reading the file, which is seconds.
 contradicted ADR-0008 and `time_based_split`'s own defaults. `docs/formulas.md`
 section 2 resolves it in favour of 70/15/15: the val slice is what early
 stopping monitors (the W11 LSTM, patience 5), and "a 70/30 split has nowhere to
-stop from". Code, docstring and ADR now agree. The val slice has no consumer
-yet because the post-freeze `AnomalyDetector.fit` takes no `X_val`; it is
-reserved, not spare, and must not be folded into train or test.
+stop from". Code, docstring and ADR now agree. `_score_resource` filters the
+val slice to fault-free windows the same way as train, then passes it as
+`fit`'s `X_val` -- reserved for detectors that use it (the LSTM), a no-op for
+the rest, and never folded into train or test.
 
 **Episode boundaries reset detector hysteresis, and a fault's grace tail is
 attributed to it, not stolen by whatever comes next.** `_score_resource` calls
@@ -339,13 +340,15 @@ def _score_resource(
     if len(windows) < 10:
         return
 
-    train_slice, _val_slice, test_slice = time_based_split(len(windows))
+    train_slice, val_slice, test_slice = time_based_split(len(windows))
     train_windows = [w for w in windows[train_slice] if _fault_at(w, intervals) is None]
     if len(train_windows) < 2:
         return
 
+    val_windows = [w for w in windows[val_slice] if _fault_at(w, intervals) is None]
+
     detector = build(detector_name, **detector_kwargs)
-    detector.fit(train_windows)
+    detector.fit(train_windows, val_windows or None)
     tally.train_windows += len(train_windows)
 
     first_alarm: dict[int, datetime] = {}

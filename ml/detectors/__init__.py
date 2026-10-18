@@ -42,3 +42,8 @@ with contextlib.suppress(ModuleNotFoundError):
 # Same guard, for @register("pyod_*") -- pyod is also only in the `ml` extra.
 with contextlib.suppress(ModuleNotFoundError):
     from ml.detectors import pyod_detector  # noqa: F401
+
+# Same guard, for @register("lstm") -- torch is also only in the `ml` extra
+# (pinned to a CPU-only build, see pyproject.toml).
+with contextlib.suppress(ModuleNotFoundError):
+    from ml.detectors import lstm  # noqa: F401
