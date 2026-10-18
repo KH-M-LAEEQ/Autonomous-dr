@@ -46,6 +46,19 @@ from ml.detectors import register
 CONSECUTIVE_BREACHES_REQUIRED = 3
 IQR_MULTIPLIER = 1.5
 
+#: v2 scaling floor (`docs/notes/scale-floor-v2.md`), opt-in via
+#: `use_scale_floor` -- off by default, so `threshold`/`lstm` are exactly v1.
+#: `spread = max(spread_v1, floor)` for bounded signals only: 1% of the
+#: documented range in `docs/metric-schema.md`. Every other signal is absent
+#: from this dict and gets no floor.
+SCALE_FLOORS: dict[str, float] = {
+    "cpu_percent": 1.0,
+    "memory_percent": 1.0,
+    "disk_used_percent": 1.0,
+    "error_rate_5xx": 0.01,
+    "error_rate_4xx": 0.01,
+}
+
 
 def _percentile(data: list[float], q: float) -> float:
     """Linear-interpolation percentile, 0 <= q <= 100."""
@@ -93,11 +106,14 @@ class ThresholdDetector(AnomalyDetector):
     # it with the IQR fence; this default is never used for a real decision.
     decision_threshold: float = 0.5
 
-    def __init__(self) -> None:
+    def __init__(self, use_scale_floor: bool = False) -> None:
         self._median: dict[str, float] = {}
         self._spread: dict[str, float] = {}
         self._consecutive_breaches = 0
         self._last_explain: dict[str, Any] = {}
+        #: Opt-in, off by default -- see `SCALE_FLOORS` above and
+        #: `docs/notes/scale-floor-v2.md`. `threshold_v2` turns this on.
+        self._use_scale_floor = use_scale_floor
 
     def fit(self, X: list[MetricWindow], X_val: list[MetricWindow] | None = None) -> None:
         """Per-signal median and IQR over every training window's full series,
@@ -119,12 +135,15 @@ class ThresholdDetector(AnomalyDetector):
         for signal, values in samples.items():
             iqr = _percentile(values, 75) - _percentile(values, 25)
             if iqr > 0:
-                self._spread[signal] = iqr
+                spread = iqr
             else:
                 # Constant in training. Fall back to its own magnitude so a
                 # departure scores ~1.0 rather than dividing by zero.
                 magnitude = abs(self._median[signal])
-                self._spread[signal] = magnitude if magnitude > 0 else 1.0
+                spread = magnitude if magnitude > 0 else 1.0
+            if self._use_scale_floor and signal in SCALE_FLOORS:
+                spread = max(spread, SCALE_FLOORS[signal])
+            self._spread[signal] = spread
 
         residuals = [self._residual(window) for window in X]
         q1, q3 = _percentile(residuals, 25), _percentile(residuals, 75)
@@ -228,3 +247,16 @@ class UnscaledThresholdDetector(ThresholdDetector):
         q1, q3 = _percentile(residuals, 25), _percentile(residuals, 75)
         self.decision_threshold = q3 + IQR_MULTIPLIER * (q3 - q1)
         self._consecutive_breaches = 0
+
+
+@register("threshold_v2")
+class FloorScaledThresholdDetector(ThresholdDetector):
+    """`ThresholdDetector` with the v2 scaling floor always on
+    (`docs/notes/scale-floor-v2.md`) -- the opt-in flag lives on the base
+    class; this just defaults it on so the harness can select it by name,
+    same pattern as `UnscaledThresholdDetector` above."""
+
+    name = "threshold_v2"
+
+    def __init__(self) -> None:
+        super().__init__(use_scale_floor=True)

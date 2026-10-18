@@ -17,6 +17,7 @@ from ml.detectors import REGISTRY, build
 pytest.importorskip("torch", reason="requires the `ml` extra's torch pin")
 
 from ml.detectors.lstm import HISTORY_LENGTH, LSTMDetector  # noqa: E402
+from ml.detectors.threshold import SCALE_FLOORS  # noqa: E402
 
 
 def _window(cpu: float, latency: float = 120.0, rng: random.Random | None = None) -> MetricWindow:
@@ -210,3 +211,63 @@ def test_early_stopping_fires_before_max_epochs_when_val_loss_cannot_improve() -
     val = [_window(850.0, latency=6000.0, rng=random.Random(100 + i)) for i in range(30)]
     detector.fit(train, val)
     assert detector.epochs_trained < 20
+
+
+def _window_with_error_rate(cpu: float, error_rate: float, rng: random.Random) -> MetricWindow:
+    now = datetime.now(UTC)
+    return MetricWindow(
+        resource_id="r1",
+        tenant_id="t1",
+        start=now - timedelta(seconds=110),
+        end=now,
+        step_seconds=10,
+        values={
+            "cpu_percent": [cpu + rng.gauss(0, 1.0) for _ in range(12)],
+            "latency_p95": [120.0 + rng.gauss(0, 8.0) for _ in range(12)],
+            # ~1e-4 noise around 0.001 -- nonzero but tiny raw IQR, well under
+            # SCALE_FLOORS["error_rate_5xx"] (0.01).
+            "error_rate_5xx": [error_rate + rng.gauss(0, 0.0001) for _ in range(12)],
+        },
+    )
+
+
+def _tiny_iqr_lstm_training(n: int = 50, seed: int = 11) -> list[MetricWindow]:
+    rng = random.Random(seed)
+    return [_window_with_error_rate(30.0, 0.001, rng) for _ in range(n)]
+
+
+def test_use_scale_floor_default_off_matches_v1_spread() -> None:
+    """`use_scale_floor` is opt-in, off by default -- v1's `lstm` must keep a
+    bounded signal's raw (floor-less) IQR as its spread, whether or not a
+    caller passes `use_scale_floor=False` explicitly."""
+    train = _tiny_iqr_lstm_training()
+
+    default = build("lstm")
+    assert isinstance(default, LSTMDetector)
+    default.fit(train)
+    idx = default._vectorizer.signals.index("error_rate_5xx") * 3  # the _mean column
+    raw_iqr = default._spread[idx]
+    assert 0 < raw_iqr < SCALE_FLOORS["error_rate_5xx"]
+
+    explicit_off = LSTMDetector(use_scale_floor=False)
+    explicit_off.fit(train)
+    assert explicit_off._spread[idx] == raw_iqr
+
+
+def test_lstm_v2_raises_a_tiny_iqr_to_the_floor() -> None:
+    train = _tiny_iqr_lstm_training()
+
+    floored = build("lstm_v2")
+    assert isinstance(floored, LSTMDetector)
+    floored.fit(train)
+    idx = floored._vectorizer.signals.index("error_rate_5xx") * 3
+    assert floored._spread[idx] == SCALE_FLOORS["error_rate_5xx"]  # _mean
+    assert floored._spread[idx + 1] == SCALE_FLOORS["error_rate_5xx"]  # _std too
+
+    unfloored = build("lstm")
+    assert isinstance(unfloored, LSTMDetector)
+    unfloored.fit(train)
+    # A signal absent from SCALE_FLOORS (latency has no documented range) is
+    # untouched by v2.
+    lat_idx = floored._vectorizer.signals.index("latency_p95") * 3
+    assert floored._spread[lat_idx] == unfloored._spread[lat_idx]

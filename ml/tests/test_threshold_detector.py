@@ -10,7 +10,7 @@ import pytest
 
 from core.models.domain import MetricWindow
 from ml.detectors import build
-from ml.detectors.threshold import CONSECUTIVE_BREACHES_REQUIRED, ThresholdDetector
+from ml.detectors.threshold import CONSECUTIVE_BREACHES_REQUIRED, SCALE_FLOORS, ThresholdDetector
 
 # Roughly the simulator's web_service baseline, with the point of the whole
 # exercise built in: cpu is tens, net_in_bytes is millions.
@@ -69,9 +69,7 @@ def _fitted(seed: int = 1) -> ThresholdDetector:
     return detector
 
 
-def _trips(
-    detector: ThresholdDetector, factory: Callable[[], MetricWindow], n: int = 4
-) -> bool:
+def _trips(detector: ThresholdDetector, factory: Callable[[], MetricWindow], n: int = 4) -> bool:
     """Feed n consecutive windows; True if the detector ever fires."""
     return any(detector.is_anomaly(factory()) for _ in range(n))
 
@@ -292,3 +290,44 @@ def test_explain_reports_the_offending_signal_and_its_scale() -> None:
     assert explanation["consecutive_breaches"] == 1
     assert explanation["training_spread"] > 0
     assert "training_median" in explanation
+
+
+def _tiny_iqr_training() -> list[MetricWindow]:
+    """`error_rate_5xx` varies by ~1e-4 around 0.001 -- a nonzero but tiny raw
+    IQR, well under `SCALE_FLOORS["error_rate_5xx"]` (0.01)."""
+    rng = random.Random(11)
+    extra = {"error_rate_5xx": [0.001 + rng.gauss(0, 0.0001) for _ in range(12)]}
+    return _training(n=50, seed=11, extra=extra)
+
+
+def test_use_scale_floor_default_off_matches_v1_spread() -> None:
+    """`use_scale_floor` is opt-in, off by default -- v1's `threshold` must
+    keep a bounded signal's raw (floor-less) IQR as its spread, whether or
+    not a caller passes `use_scale_floor=False` explicitly."""
+    train = _tiny_iqr_training()
+
+    default = build("threshold")
+    assert isinstance(default, ThresholdDetector)
+    default.fit(train)
+
+    explicit_off = ThresholdDetector(use_scale_floor=False)
+    explicit_off.fit(train)
+
+    raw_iqr = default._spread["error_rate_5xx"]
+    assert 0 < raw_iqr < SCALE_FLOORS["error_rate_5xx"]
+    assert explicit_off._spread["error_rate_5xx"] == raw_iqr
+
+
+def test_threshold_v2_raises_a_tiny_iqr_to_the_floor() -> None:
+    train = _tiny_iqr_training()
+
+    floored = build("threshold_v2")
+    assert isinstance(floored, ThresholdDetector)
+    floored.fit(train)
+    assert floored._spread["error_rate_5xx"] == SCALE_FLOORS["error_rate_5xx"]
+
+    unfloored = build("threshold")
+    assert isinstance(unfloored, ThresholdDetector)
+    unfloored.fit(train)
+    # Unbounded signals (no entry in SCALE_FLOORS) are untouched by v2.
+    assert floored._spread["net_in_bytes"] == unfloored._spread["net_in_bytes"]
