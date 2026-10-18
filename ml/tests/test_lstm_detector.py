@@ -194,3 +194,19 @@ def test_fit_accepts_x_val_for_early_stopping() -> None:
     val = _normal_windows(n=20, seed=2)
     detector.fit(train, val)
     assert 0 < detector.epochs_trained <= 20
+
+
+def test_early_stopping_fires_before_max_epochs_when_val_loss_cannot_improve() -> None:
+    """`X_val` drawn from a wildly different distribution than `X`: the
+    forecaster converges on train's near-static signal almost immediately,
+    after which its val-loss (dominated by the scale mismatch) never sets a
+    new best. 3 such epochs in a row must stop training well short of the
+    20-epoch cap -- this is the patience-3 branch itself, not just that
+    `epochs_trained` lands in `(0, 20]` (`test_fit_accepts_x_val_for_early_
+    stopping` passes whether or not that branch ever runs)."""
+    detector = build("lstm")
+    assert isinstance(detector, LSTMDetector)
+    train = _normal_windows(n=50, seed=1)
+    val = [_window(850.0, latency=6000.0, rng=random.Random(100 + i)) for i in range(30)]
+    detector.fit(train, val)
+    assert detector.epochs_trained < 20
